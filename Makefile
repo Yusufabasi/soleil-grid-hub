@@ -37,14 +37,12 @@ $(TOOLS)/bin/uv:
 	@$(TOOLS)/bin/pip install --quiet --upgrade uv
 	@echo "bootstrapped uv into $(TOOLS)"
 
-venv: $(VENV)/bin/python
+venv: backend/uv.lock | $(TOOLS)/bin/uv
+	@$(TOOLS)/bin/uv sync --project backend --quiet
+	@$(VENV)/bin/python --version
 
 backend/uv.lock: backend/pyproject.toml | $(TOOLS)/bin/uv
 	@$(TOOLS)/bin/uv lock --project backend --quiet
-
-$(VENV)/bin/python: backend/pyproject.toml backend/uv.lock | $(TOOLS)/bin/uv
-	@$(TOOLS)/bin/uv sync --project backend --quiet
-	@$(VENV)/bin/python --version
 
 up: env
 	@bash tools/scripts/gen_dev_userlist.sh
@@ -56,11 +54,11 @@ down:
 reset:
 	$(COMPOSE) down -v --remove-orphans
 
-test: venv
+test: env venv
 	cd backend && python -m pytest tests/unit tests/architecture -q
 	@if [ -f frontend/package.json ]; then cd frontend && npm test --silent; fi
 
-lint: venv
+lint: env venv
 	cd backend && ruff check .
 	cd backend && ruff format --check .
 	cd backend && DJANGO_SETTINGS_MODULE=hub.settings.test mypy
@@ -69,7 +67,7 @@ lint: venv
 	@if command -v actionlint >/dev/null 2>&1; then actionlint; fi
 	@if [ -f frontend/package.json ]; then cd frontend && npm run lint --silent; fi
 
-contracts: venv
+contracts: env venv
 	python -m pytest tests/test_alignment.py tests/test_schema_in_postgres.py tests/test_traceability.py -q
 	python tools/check_traceability.py
 	python -c "import sys, yaml; from openapi_spec_validator import validate as v; v(yaml.safe_load(open('api/openapi.yaml'))); print('openapi.yaml is valid')"

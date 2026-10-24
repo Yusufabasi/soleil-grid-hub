@@ -9,8 +9,8 @@ of the slice.
 
 | Task | Scope | Status | Commit | Test command and result |
 |---|---|---|---|---|
-| 00.1 | Repository scaffolding, tooling and Makefile | in progress | — | `python -m pytest tests/test_infra_skeleton.py -q` |
-| 00.2 | Django project, settings modules, entrypoints, config checker | not started | — | `cd backend && python -m pytest tests/architecture -q` |
+| 00.1 | Repository scaffolding, tooling and Makefile | done | `60db793` | `python -m pytest tests/test_infra_skeleton.py -q` -> `2 passed`; `make -n lint` exit 0 |
+| 00.2 | Django project, settings modules, entrypoints, config checker | done | `a633292` | `cd backend && python -m pytest tests/architecture -q` -> `41 passed`; `python tools/check_django_config.py` -> exit 0 (9.4 s, runs `check --deploy` per module + `makemigrations --check`); ruff, ruff format, mypy strict clean
 | 00.3 | Clock, IdGenerator, config helpers, container | not started | — | `cd backend && python -m pytest tests/unit/shared -q` |
 | 00.4 | Structured logging, request context, metrics, tracing | not started | — | `cd backend && python -m pytest tests/unit/shared -q` |
 | 00.5 | Error taxonomy and problem+json handler | not started | — | `cd backend && python -m pytest tests/unit/shared/test_problem.py -q` |
