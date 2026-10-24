@@ -33,6 +33,7 @@ from hub.shared.errors import DomainError, Unexpected
 
 __all__ = [
     "MESSAGES",
+    "MethodNotAllowed",
     "exception_handler",
     "handler404",
     "handler500",
@@ -42,6 +43,19 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+
+
+class MethodNotAllowed(DomainError):
+    """405 for a plain view: the route exists but not for this method (RFC 9110 15.5.6).
+
+    A transport concern rather than a domain one, so it lives next to the converter: a
+    plain view has no DRF machinery to turn ``HttpResponseNotAllowed`` into problem+json.
+    """
+
+    code = "method_not_allowed"
+    message_key = "method_not_allowed"
+    http_status = 405
+
 
 # 429 and 503 carry Retry-After (slice 00 contract); this is the fallback when the error
 # itself carries no hint.
@@ -59,6 +73,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "duplicate_resource": "A resource with the same natural key already exists.",
         "rate_limited": "Too many requests; retry after the delay in Retry-After.",
         "provider_unavailable": "An upstream provider is unavailable; retry shortly.",
+        "service_unavailable": "This instance cannot serve the request right now; retry as advised.",
+        "method_not_allowed": "This route does not support that HTTP method.",
         "invariant_violation": "An internal consistency rule was violated.",
         "internal_error": "An unexpected error occurred; quote the request id when reporting it.",
     },
@@ -71,6 +87,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "duplicate_resource": "Une ressource avec la même clé naturelle existe déjà.",
         "rate_limited": "Trop de requêtes ; réessayez après le délai de Retry-After.",
         "provider_unavailable": "Un fournisseur externe est indisponible ; réessayez sous peu.",
+        "service_unavailable": "Cette instance ne peut pas traiter la requête pour le moment ; réessayez comme indiqué.",
+        "method_not_allowed": "Cette route ne prend pas en charge cette méthode HTTP.",
         "invariant_violation": "Une règle de cohérence interne a été violée.",
         "internal_error": "Une erreur inattendue s'est produite ; citez l'identifiant de requête.",
     },

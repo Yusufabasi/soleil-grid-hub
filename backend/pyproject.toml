@@ -91,9 +91,10 @@ show_error_codes = true
 exclude = "(?x)(^/.*/migrations/)"
 files = ["src", "tests"]
 
-# django-environ ships no type information.
+# django-environ ships no type information; jsonschema has no bundled annotations and the
+# stub package is not worth a lockfile change for a test-only contract check.
 [[tool.mypy.overrides]]
-module = ["environ"]
+module = ["environ", "jsonschema"]
 ignore_missing_imports = true
 
 # The plugin needs a settings module; tests run against the test settings (docs/03 section 9).

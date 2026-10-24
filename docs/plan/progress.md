@@ -13,8 +13,8 @@ of the slice.
 | 00.2 | Django project, settings modules, entrypoints, config checker | done | `1980883` | `cd backend && python -m pytest tests/architecture -q` -> `41 passed`; `python tools/check_django_config.py` -> exit 0 (9.4 s, runs `check --deploy` per module + `makemigrations --check`); ruff, ruff format, mypy strict clean
 | 00.3 | Clock, IdGenerator, config helpers, container | done | `57d66eb` | `cd backend && python -m pytest tests/unit/shared -q` -> `12 passed`; mypy strict, ruff and ruff format clean
 | 00.4 | Structured logging, request context, metrics, tracing | done | `181110d` | `cd backend && python -m pytest tests/unit/shared -q` -> `30 passed` (11 new); `pytest tests/unit tests/architecture -q` -> `71 passed`; ruff, ruff format, mypy strict clean; `python tools/check_django_config.py` -> exit 0 |
-| 00.5 | Error taxonomy and problem+json handler | done | `PENDING` | `cd backend && python -m pytest tests/unit/shared/test_problem.py -q` -> `7 passed`; `pytest tests/unit tests/architecture -q` -> `78 passed`; mypy strict, ruff, ruff format clean |
-| 00.6 | Health endpoints and readiness registry | not started | — | `cd backend && python -m pytest tests/integration/shared/test_health.py -q` |
+| 00.5 | Error taxonomy and problem+json handler | done | `00d1cd4` | `cd backend && python -m pytest tests/unit/shared/test_problem.py -q` -> `7 passed`; `pytest tests/unit tests/architecture -q` -> `78 passed`; mypy strict, ruff, ruff format clean |
+| 00.6 | Health endpoints and readiness registry | done | `be18144` | `cd backend && python -m pytest tests/integration/shared/test_health.py -q -m integration` -> `17 passed` (4 URLConfs x live/route tests); `pytest tests/unit tests/architecture -q` -> `78 passed`; mypy strict, ruff, ruff format clean; `python tools/check_django_config.py` -> exit 0 |
 | 00.7 | DjangoUnitOfWork, outbox writer, worker command stubs | not started | — | `cd backend && python -m pytest tests/integration/shared/test_uow.py tests/unit/shared/test_commands.py -q` |
 | 00.8 | SQL baseline migration mechanism (`hubdb`) | not started | — | `cd backend && python -m pytest tests/integration/hubdb -q -m integration` |
 | 00.9 | Import-linter contracts and architecture tests | not started | — | `cd backend && python -m pytest tests/architecture/test_importlinter.py -q` |
@@ -50,6 +50,25 @@ of the slice.
 - **00.5 `Retry-After` on 503**: docs/05 requires `Retry-After` on 429 and 503; any 429/503
   problem response carries it (error-provided hint, else `retry_after_seconds` on
   `RateLimited`, else 30 s).
+- **00.6 test infrastructure**: `backend/tests/conftest.py` starts one `postgres:16`
+  container per session, applies `db/schema.sql` once as the superuser it expects, gives the
+  `hub_api` role a dev-only LOGIN, and overrides pytest-django's `django_db_setup` instead of
+  running `migrate` (slice 00 has no models, ADR-0020). docs/10 6.3 also says "cloned per test
+  module"; with a single integration module the clone step would add a schema load per
+  module for no isolation gain, so it is deferred to the module that needs it. Redis runs in
+  its own container; the database alias is mutated in place because Django treats `DATABASES`
+  as a complex override and a replaced dict leaves the connection handler on the old one.
+- **00.6 readiness probes**: Postgres is probed with its own short-lived psycopg connection
+  (`connect_timeout=2`, `statement_timeout=2000`) rather than Django's request connection, so
+  a probe cannot inherit a poisoned connection or queue behind one, and the check is bounded
+  as docs/09 1.4 requires. Redis is probed with `PING` (`socket_timeout=1`) and is not
+  critical: an outage reports `degraded` and 200, per docs/09 8.2.
+- **00.6 `service_unavailable` and 405**: docs/03 7.1 has no class for the readiness 503, so
+  the view raises `ExternalUnavailable(code="service_unavailable",
+  message_key="service_unavailable")` and `problem.py` carries the en/fr sentence;
+  `MethodNotAllowed` (405) lives in `problem.py` because a plain view has no DRF machinery to
+  turn `HttpResponseNotAllowed` into a problem document. Both go through `to_problem`, the
+  single converter.
 
 ## Open change requests
 
