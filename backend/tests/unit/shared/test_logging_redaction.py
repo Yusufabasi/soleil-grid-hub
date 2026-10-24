@@ -86,3 +86,27 @@ def test_json_output_has_required_fields():
 
     assert {"service", "version", "env", "level", "ts", "request_id", "trace_id"} <= set(payload)
     assert payload["service"] == "hub-test"
+
+
+def test_extra_fields_survive_into_the_json_line_and_are_redacted():
+    """``logger.info(..., extra={...})`` is how business context is logged: it must arrive."""
+    configure_logging(service="hub-test", level="INFO")
+    stream = io.StringIO()
+    root = logging.getLogger()
+    for handler in root.handlers:
+        if hasattr(handler, "stream"):
+            handler.stream = stream
+
+    logging.getLogger("hub.test").info(
+        "with_context",
+        extra={"top_up_id": "abc", "authorization": "Bearer secret", "phone": "+243812345678"},
+    )
+    for handler in root.handlers:
+        handler.flush()
+
+    payload = json.loads(stream.getvalue().strip().splitlines()[-1])
+
+    assert payload["top_up_id"] == "abc"
+    assert payload["authorization"] == "[redacted]"
+    assert payload["phone"] == "[redacted]"
+    assert "+243812345678" not in json.dumps(payload)

@@ -173,6 +173,10 @@ def configure_logging(*, service: str, level: str = "INFO") -> None:
         _add_level,
         structlog.processors.TimeStamper(fmt="iso", key="ts", utc=True),
         _add_request_context,
+        # Business context arrives through ``extra=``; ProcessorFormatter does not copy it
+        # by itself, and it must be merged before redaction so a secret in an extra is
+        # masked like any other value (docs/03 7.4).
+        structlog.stdlib.ExtraAdder(),
         add_trace_id,
         redact_processor,
     ]
