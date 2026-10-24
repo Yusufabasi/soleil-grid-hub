@@ -13,6 +13,9 @@ from __future__ import annotations
 
 import os
 
+# Safe at import time: the metrics module reads prometheus_client and the environment only.
+from hub.shared.metrics import start_metrics_server
+
 bind = os.environ.get("GUNICORN_BIND", "0.0.0.0:8000")
 workers = int(os.environ.get("GUNICORN_WORKERS", "4"))
 threads = int(os.environ.get("GUNICORN_THREADS", "4"))
@@ -36,6 +39,4 @@ forwarded_allow_ips = os.environ.get("GUNICORN_FORWARDED_ALLOW_IPS", "127.0.0.1"
 
 def when_ready(server: object) -> None:
     """Start the internal metrics port once per pod (docs/09 section 5)."""
-    from hub.shared.metrics import start_metrics_server
-
     start_metrics_server()

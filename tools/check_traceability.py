@@ -88,14 +88,16 @@ def parse_matrix(
     following = re.search(r"^## ", section, re.MULTILINE)
     if following:
         section = section[: following.start()]
-    rows = {}
+    def cells_of(row: list[str]) -> tuple[list[str], list[str], list[str], list[str]]:
+        parts = ([part.strip() for part in cell.split("<br>") if part.strip()] for cell in row)
+        first, second, third, fourth = parts
+        return first, second, third, fourth
+
+    rows: dict[str, tuple[list[str], list[str], list[str], list[str]]] = {}
     for line in section.splitlines():
         cells = [c.strip() for c in line.strip().strip("|").split("|")]
         if len(cells) >= 5 and re.fullmatch(r"N?FR-\d{2}", cells[0]):
-            rows[cells[0]] = tuple(
-                [part.strip() for part in cell.split("<br>") if part.strip()]
-                for cell in cells[1:5]
-            )
+            rows[cells[0]] = cells_of(cells[1:5])
     return rows
 
 
