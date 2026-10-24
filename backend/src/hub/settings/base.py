@@ -15,6 +15,9 @@ from hub.shared.config import env
 
 BACKEND_DIR = Path(__file__).resolve().parents[3]
 REPO_ROOT = BACKEND_DIR.parent
+# Where db/ (schema.sql, baseline, migrations) lives. Empty means "derive it from this
+# file's location", which is right for a checkout; the image sets it to /app.
+HUB_REPO_ROOT = env.str("HUB_REPO_ROOT", default="") or str(REPO_ROOT)
 
 env.load(REPO_ROOT / ".env")
 

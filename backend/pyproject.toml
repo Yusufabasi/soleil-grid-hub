@@ -97,6 +97,12 @@ files = ["src", "tests"]
 module = ["environ", "jsonschema"]
 ignore_missing_imports = true
 
+# Test helpers that live outside the package: the root invariant parser and the
+# catalog fingerprint of the migration tests (both imported by path).
+[[tool.mypy.overrides]]
+module = ["test_schema_in_postgres", "fingerprint"]
+ignore_missing_imports = true
+
 # The plugin needs a settings module; tests run against the test settings (docs/03 section 9).
 [tool.django-stubs]
 django_settings_module = "hub.settings.test"

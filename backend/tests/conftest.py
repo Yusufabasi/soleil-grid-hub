@@ -13,7 +13,9 @@ container, so ``make verify`` is deterministic and never needs a running compose
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -30,11 +32,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_SQL = REPO_ROOT / "db" / "schema.sql"
 POSTGRES_IMAGE = "postgres:16"
 REDIS_IMAGE = "redis:7-alpine"
-
-# Dev-only password for the application role inside the throwaway container. The schema
-# creates every role NOLOGIN on purpose; the deployment is what adds LOGIN and a rotated
-# password from the secrets manager (db/schema.sql section 0).
-TEST_ROLE_PASSWORD = "dev"
 
 
 def _libpq_dsn(url: str) -> str:
@@ -53,24 +50,65 @@ def _as_role(dsn: str, *, user: str, password: str) -> str:
     return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
-@pytest.fixture(scope="session")
-def postgres_url() -> Iterator[str]:
-    """A PostgreSQL 16 database with ``db/schema.sql`` applied, once per session.
+_DATABASE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
 
-    Yields the URL of the ``migrator`` role: it owns the tables, so a test can read back
-    what it wrote. The application roles get their grants for the technical tables
-    (``hub.outbox`` among them) in the slices that use them, and the tests that exercise a
-    specific role say so explicitly.
+
+@dataclass(frozen=True)
+class PostgresServer:
+    """The session container, addressable per database (docs/10 6.1).
+
+    ``admin_user`` is the container's own superuser (``test`` for the official image): the
+    baseline migration creates roles and grants, so it has to run as that role.
     """
+
+    admin_dsn: str  # superuser, on the container's default database
+    admin_user: str = "postgres"
+
+    def dsn(self, database: str, *, user: str | None = None, password: str | None = None) -> str:
+        """A DSN for ``database`` as ``user``; the superuser password is reused by default."""
+        if not _DATABASE_NAME_RE.fullmatch(database):
+            raise ValueError(f"not a database name: {database!r}")
+        parts = urlsplit(self.admin_dsn)
+        secret = password if password is not None else (parts.password or "")
+        netloc = f"{user or self.admin_user}:{secret}@{parts.hostname}:{parts.port}"
+        return urlunsplit((parts.scheme, netloc, f"/{database}", "", ""))
+
+    def create_database(self, name: str) -> str:
+        """Drop and recreate ``name`` and return its superuser DSN."""
+        if not _DATABASE_NAME_RE.fullmatch(name):
+            raise ValueError(f"not a database name: {name!r}")
+        with psycopg.connect(self.dsn("postgres"), autocommit=True) as connection:
+            connection.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s",
+                [name],
+            )
+            connection.execute(f'DROP DATABASE IF EXISTS "{name}"')
+            connection.execute(f'CREATE DATABASE "{name}"')
+        return self.dsn(name)
+
+
+@pytest.fixture(scope="session")
+def postgres_server() -> Iterator[PostgresServer]:
+    """PostgreSQL 16 with ``db/schema.sql`` applied to ``hub_test``, once per session."""
     with PostgresContainer(POSTGRES_IMAGE, driver="psycopg", dbname="hub_test") as postgres:
-        admin_url = _libpq_dsn(postgres.get_connection_url())
-        with psycopg.connect(admin_url, autocommit=True) as connection:
+        admin_dsn = _libpq_dsn(postgres.get_connection_url())
+        server = PostgresServer(admin_dsn, admin_user=urlsplit(admin_dsn).username or "postgres")
+        with psycopg.connect(server.admin_dsn, autocommit=True) as connection:
             # One statement list: the schema is written to run as a superuser on an empty
             # database (db/schema.sql header), so it is executed in a single call.
             connection.execute(SCHEMA_SQL.read_text(encoding="utf-8"), prepare=False)
-            for role in ("hub_api", "migrator"):
-                connection.execute(f"ALTER ROLE {role} LOGIN PASSWORD '{TEST_ROLE_PASSWORD}'")
-        yield _as_role(admin_url, user="migrator", password=TEST_ROLE_PASSWORD)
+        yield server
+
+
+@pytest.fixture(scope="session")
+def postgres_url(postgres_server: PostgresServer) -> str:
+    """The application database, as the container's superuser.
+
+    The schema creates every application role NOLOGIN on purpose, and an invariant test
+    pins that (``db/invariant_tests.sql``), so the harness must not add LOGIN to one. Tests
+    that exercise a specific role create their own login and say so explicitly (docs/10 2.9).
+    """
+    return postgres_server.dsn("hub_test")
 
 
 @pytest.fixture(scope="session")

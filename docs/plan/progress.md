@@ -16,7 +16,7 @@ of the slice.
 | 00.5 | Error taxonomy and problem+json handler | done | `00d1cd4` | `cd backend && python -m pytest tests/unit/shared/test_problem.py -q` -> `7 passed`; `pytest tests/unit tests/architecture -q` -> `78 passed`; mypy strict, ruff, ruff format clean |
 | 00.6 | Health endpoints and readiness registry | done | `ebe2d81` | `cd backend && python -m pytest tests/integration/shared/test_health.py -q -m integration` -> `17 passed` (4 URLConfs x live/route tests); `pytest tests/unit tests/architecture -q` -> `78 passed`; mypy strict, ruff, ruff format clean; `python tools/check_django_config.py` -> exit 0 |
 | 00.7 | DjangoUnitOfWork, outbox writer, worker command stubs | done | `45ba2f6` | `cd backend && python -m pytest tests/integration/shared/test_uow.py tests/unit/shared/test_commands.py -q -m integration` -> `7 passed`, `pytest tests/unit/shared/test_commands.py -q` -> `6 passed`; `pytest tests/unit tests/architecture -q` -> `85 passed`; `pytest tests/integration -q -m integration` -> `24 passed`; ruff, ruff format, mypy strict clean; `python tools/check_django_config.py` -> exit 0; `manage.py run_worker/run_relay/run_scheduler --once` -> exit 0 with `loop.started` then `loop.stopped` JSON lines |
-| 00.8 | SQL baseline migration mechanism (`hubdb`) | not started | — | `cd backend && python -m pytest tests/integration/hubdb -q -m integration` |
+| 00.8 | SQL baseline migration mechanism (`hubdb`) | done | `PENDING` | `cd backend && python -m pytest tests/integration/hubdb -q -m integration` -> `7 passed` (baseline byte copy, pairing rules incl. three negative trees, migrate-from-empty, catalog fingerprint equality, invariants on the migrated database, single-statement RunSQL); `pytest tests/integration -q -m integration` -> `31 passed`; `pytest tests/unit tests/architecture -q` -> `85 passed`; root `pytest tests -q` -> `36 passed`; ruff, ruff format, mypy strict clean; checker exit 0; `makemigrations --check` -> no changes |
 | 00.9 | Import-linter contracts and architecture tests | not started | — | `cd backend && python -m pytest tests/architecture/test_importlinter.py -q` |
 | 00.10 | Images, compose stack, PgBouncer, HAProxy, stubs | not started | — | `python -m pytest tests/test_infra_skeleton.py -q` |
 | 00.11 | CI pipeline, security scans, verify script | not started | — | `python -m pytest tests/test_infra_skeleton.py -q` |
@@ -74,17 +74,37 @@ of the slice.
   every `extra={...}` field, because structlog builds a foreign record's event dict from the
   message alone. `structlog.stdlib.ExtraAdder()` now runs before the redaction processor, so a
   `top_up_id` reaches the line and a secret in an extra is still masked (commit `a6a4b56`).
-- **00.7 test database role**: the harness connects as `migrator` (the owner of the SQL
-  objects), because `hub.outbox` grants for `hub_api` arrive with the slices that write it.
-  `test_principal_context_is_transaction_local` is the module's one `transaction=True` test:
-  a principal set with `set_config(..., true)` only reverts at a real transaction boundary,
-  and a savepoint release would keep it.
+- **00.7 test database role (superseded by 00.8)**: the harness first connected as
+  `migrator`, then 00.8's invariant test proved that is wrong — `db/invariant_tests.sql`
+  pins every application role as NOLOGIN, and roles are cluster-wide, so adding LOGIN to
+  `migrator` for the harness broke a designed invariant. The harness now connects as the
+  container's own superuser; a test that exercises a specific role creates its own login.
+  `test_principal_context_is_transaction_local` remains the module's one `transaction=True`
+  test: a principal set with `set_config(..., true)` only reverts at a real transaction
+  boundary, and a savepoint release would keep it.
 - **00.7 command shape**: `run_worker.py` holds `LoopCommand`, and `run_relay`/`run_scheduler`
   subclass it, so one implementation serves all three no-op loops without adding a kernel
   module the slice does not list. `handle()` returns `None` (Django's contract, so the process
   exits 0), `--once` runs a single iteration, `--group` is accepted and ignored by
   `run_worker`, and the loop stops through the command's own flag because a SIGTERM handler
   can only be installed from the main thread (a test runs the loop in a thread).
+
+- **00.8 repo root for SQL files**: `HUB_REPO_ROOT` (already documented, empty in
+  `.env.example`) names the directory holding `db/`; empty means "derive it from
+  `settings/base.py`'s location", which is right for a checkout, and the image sets `/app`.
+  `sql_text()` accepts only `^[0-9]{4}_[a-z0-9_]+$` stems, so a stem can never escape
+  `db/baseline` or `db/migrations`.
+- **00.8 catalog fingerprint**: compares relations, columns, constraints, indexes, triggers
+  (`tgenabled`), functions (owner, `prosecdef`, `proconfig`), policies, ACLs expanded per
+  grantee, `pg_db_role_setting` and `pg_auth_members`. Three normalisations are deliberate:
+  `django_migrations` and its objects are excluded (it exists only in the migrated database),
+  system namespaces (`pg_%`, `information_schema`) are excluded because TOAST relation names
+  embed per-database OIDs, and the current database name inside `pg_db_role_setting` is
+  rewritten to `{db}` because the two databases have different names.
+- **00.8 migrate in tests runs as a subprocess**: the test invokes
+  `manage.py migrate hubdb 0000 --settings=hub.settings.migrate` with an explicit environment
+  (never the developer's `.env`), pointed at a superuser login, which is the documented
+  first-run path in `hub.settings.migrate`.
 
 ## Open change requests
 
