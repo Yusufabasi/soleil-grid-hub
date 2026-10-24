@@ -10,10 +10,12 @@ are parsed here and nowhere else.
 from __future__ import annotations
 
 import builtins
+import os
 from pathlib import Path
 from typing import Any
 
 import environ
+from django.core.exceptions import ImproperlyConfigured
 
 __all__ = ["Secret", "env"]
 
@@ -24,6 +26,9 @@ _ENGINE = "django.db.backends.postgresql"  # psycopg 3 is picked up automaticall
 _Text = builtins.str
 _Int = builtins.int
 _Bool = builtins.bool
+
+_TRUE_VALUES = frozenset({"true", "t", "yes", "y", "on", "1"})
+_FALSE_VALUES = frozenset({"false", "f", "no", "n", "off", "0", ""})
 
 
 class Secret:
@@ -79,12 +84,20 @@ class _Env:
         return value
 
     def bool(self, name: _Text, default: _Bool | None = None) -> _Bool:
-        value: _Bool
-        if default is None:
-            value = self._raw.bool(name)
-        else:
-            value = self._raw.bool(name, default)
-        return value
+        """Parse a boolean: ``true/1/yes/on`` are true, ``false/0/no/off`` (and the empty
+        string) are false. A missing variable raises unless a default is given.
+        """
+        raw = os.environ.get(name)
+        if raw is None:
+            if default is None:
+                raise ImproperlyConfigured(f"Set the {name} environment variable")
+            return default
+        value = raw.strip().lower()
+        if value in _TRUE_VALUES:
+            return True
+        if value in _FALSE_VALUES:
+            return False
+        raise ValueError(f"Environment variable {name} is not a boolean: {raw!r}")
 
     def secret(self, name: _Text, default: _Text | None = None) -> Secret:
         return Secret(self.str(name, default))

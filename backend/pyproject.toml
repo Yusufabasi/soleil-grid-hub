@@ -96,6 +96,10 @@ files = ["src", "tests"]
 module = ["environ"]
 ignore_missing_imports = true
 
+# The plugin needs a settings module; tests run against the test settings (docs/03 section 9).
+[tool.django-stubs]
+django_settings_module = "hub.settings.test"
+
 # docs/03 section 9 asks for --strict on `hub.*`; the test suite keeps every other check
 # but declares its fixtures loosely.
 [[tool.mypy.overrides]]
