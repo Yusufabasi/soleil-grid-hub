@@ -57,7 +57,10 @@ def _as_role(dsn: str, *, user: str, password: str) -> str:
 def postgres_url() -> Iterator[str]:
     """A PostgreSQL 16 database with ``db/schema.sql`` applied, once per session.
 
-    Yields the URL of the ``hub_api`` role, i.e. the connection the api deployable uses.
+    Yields the URL of the ``migrator`` role: it owns the tables, so a test can read back
+    what it wrote. The application roles get their grants for the technical tables
+    (``hub.outbox`` among them) in the slices that use them, and the tests that exercise a
+    specific role say so explicitly.
     """
     with PostgresContainer(POSTGRES_IMAGE, driver="psycopg", dbname="hub_test") as postgres:
         admin_url = _libpq_dsn(postgres.get_connection_url())
@@ -65,8 +68,9 @@ def postgres_url() -> Iterator[str]:
             # One statement list: the schema is written to run as a superuser on an empty
             # database (db/schema.sql header), so it is executed in a single call.
             connection.execute(SCHEMA_SQL.read_text(encoding="utf-8"), prepare=False)
-            connection.execute(f"ALTER ROLE hub_api LOGIN PASSWORD '{TEST_ROLE_PASSWORD}'")
-        yield _as_role(admin_url, user="hub_api", password=TEST_ROLE_PASSWORD)
+            for role in ("hub_api", "migrator"):
+                connection.execute(f"ALTER ROLE {role} LOGIN PASSWORD '{TEST_ROLE_PASSWORD}'")
+        yield _as_role(admin_url, user="migrator", password=TEST_ROLE_PASSWORD)
 
 
 @pytest.fixture(scope="session")
