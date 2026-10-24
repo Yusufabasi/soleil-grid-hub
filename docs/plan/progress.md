@@ -11,8 +11,8 @@ of the slice.
 |---|---|---|---|---|
 | 00.1 | Repository scaffolding, tooling and Makefile | done | `60db793` | `python -m pytest tests/test_infra_skeleton.py -q` -> `2 passed`; `make -n lint` exit 0 |
 | 00.2 | Django project, settings modules, entrypoints, config checker | done | `1980883` | `cd backend && python -m pytest tests/architecture -q` -> `41 passed`; `python tools/check_django_config.py` -> exit 0 (9.4 s, runs `check --deploy` per module + `makemigrations --check`); ruff, ruff format, mypy strict clean
-| 00.3 | Clock, IdGenerator, config helpers, container | not started | — | `cd backend && python -m pytest tests/unit/shared -q` |
-| 00.4 | Structured logging, request context, metrics, tracing | not started | — | `cd backend && python -m pytest tests/unit/shared -q` |
+| 00.3 | Clock, IdGenerator, config helpers, container | done | `57d66eb` | `cd backend && python -m pytest tests/unit/shared -q` -> `12 passed`; mypy strict, ruff and ruff format clean
+| 00.4 | Structured logging, request context, metrics, tracing | done | `pending` | `cd backend && python -m pytest tests/unit/shared -q` -> `30 passed` (11 new); `pytest tests/unit tests/architecture -q` -> `71 passed`; ruff, ruff format, mypy strict clean; `python tools/check_django_config.py` -> exit 0 |
 | 00.5 | Error taxonomy and problem+json handler | not started | — | `cd backend && python -m pytest tests/unit/shared/test_problem.py -q` |
 | 00.6 | Health endpoints and readiness registry | not started | — | `cd backend && python -m pytest tests/integration/shared/test_health.py -q` |
 | 00.7 | DjangoUnitOfWork, outbox writer, worker command stubs | not started | — | `cd backend && python -m pytest tests/integration/shared/test_uow.py tests/unit/shared/test_commands.py -q` |
@@ -24,7 +24,20 @@ of the slice.
 
 ## Assumptions
 
-Nothing recorded yet.
+- **00.4 `SERVICE_NAME`**: the log lines and `http_requests_total{service,...}` series need a
+  per-deployable label (docs/09 uses `service="hub-ingest"`), so each settings module sets a
+  plain `SERVICE_NAME` constant (`hub-api`, `hub-ingest`, `hub-worker`, `hub-stream`,
+  `hub-migrate`, `hub-test`; base defaults to `hub`). It is not an environment variable, so
+  the Interfaces list of slice 00 is unchanged.
+- **00.4 framework 4xx/5xx lines carry no `request_id`**: Django logs `status_code >= 400` in
+  `BaseHandler.get_response`, *after* the middleware chain returns, and the context must be
+  cleared before the response returns (`test_context_cleared_after_request`). Application log
+  lines inside the request and the `X-Request-Id` response header both carry the id; those
+  framework lines are correlatable by the header alone.
+- **00.2 test made hermetic (fixed in 00.4)**: `test_ingest_requires_a_role` failed whenever a
+  local `.env` exists, because `env.load()` re-populates the variable it deletes from the
+  environment — and `make env`/`make up` always create that file. The test now stubs the
+  `.env` loader so it proves the environment check itself.
 
 ## Open change requests
 

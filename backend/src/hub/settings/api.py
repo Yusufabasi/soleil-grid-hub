@@ -5,6 +5,8 @@ from hub.settings.base import build_database
 
 ROOT_URLCONF = "hub.urls.api"
 
+SERVICE_NAME = "hub-api"
+
 DATABASES = {
     "default": build_database("HUB_DB_API_URL", app_name="hub-api"),
     "replica": build_database("HUB_DB_API_REPLICA_URL", app_name="hub-api-ro"),

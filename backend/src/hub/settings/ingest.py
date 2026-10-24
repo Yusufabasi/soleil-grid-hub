@@ -18,6 +18,7 @@ if HUB_INGEST_ROLE not in {"webhooks", "telemetry"}:
     )
 
 ROOT_URLCONF = "hub.urls.webhooks" if HUB_INGEST_ROLE == "webhooks" else "hub.urls.telemetry"
+SERVICE_NAME = "hub-ingest"
 
 DATABASES = {
     "default": build_database("HUB_DB_INGEST_URL", app_name="hub-ingest"),

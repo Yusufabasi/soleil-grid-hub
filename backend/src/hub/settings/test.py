@@ -24,6 +24,8 @@ for _name, _value in _TEST_DEFAULTS.items():
 from hub.settings.api import *  # noqa: E402, F403
 from hub.settings.base import build_database  # noqa: E402
 
+SERVICE_NAME = "hub-test"
+
 DATABASES = {
     "default": build_database("HUB_TEST_DB_URL", app_name="hub-test"),
 }

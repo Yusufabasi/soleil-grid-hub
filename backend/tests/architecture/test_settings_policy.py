@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from hub.shared import config
+
 BACKEND = Path(__file__).resolve().parents[2]
 REPO = BACKEND.parent
 MODULES = ["api", "ingest", "worker", "stream", "migrate", "test"]
@@ -159,6 +161,15 @@ def test_ingest_role_selects_the_urlconf(load, monkeypatch, role, urlconf):
 
 def test_ingest_requires_a_role(load, monkeypatch):
     monkeypatch.delenv("HUB_INGEST_ROLE", raising=False)
+
+    # A local .env would satisfy the requirement on its own. The file is a convenience, never
+    # a substitute for a real environment, so it is stubbed out and the check itself is what
+    # this test proves.
+    def _no_env_file(path):
+        return None
+
+    monkeypatch.setattr(config.env, "load", _no_env_file)
+
     for cached in [m for m in list(sys.modules) if m.startswith("hub.settings")]:
         del sys.modules[cached]
 

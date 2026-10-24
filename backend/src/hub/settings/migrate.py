@@ -8,6 +8,8 @@ for everything after. No URLConf: migrate serves no HTTP.
 from hub.settings.base import *  # noqa: F403
 from hub.settings.base import build_database
 
+SERVICE_NAME = "hub-migrate"
+
 DATABASES = {
     "default": build_database("HUB_MIGRATE_URL", app_name="hub-migrate"),
 }

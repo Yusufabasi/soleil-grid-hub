@@ -21,6 +21,9 @@ env.load(REPO_ROOT / ".env")
 # --- runtime identity -------------------------------------------------------------------
 HUB_ENV = env.str("HUB_ENV", default="production")  # local | test | staging | production
 HUB_VERSION = env.str("HUB_VERSION", default="dev")
+# Service label of this deployable's log lines and Prometheus series (docs/09 section 5);
+# every settings module overrides it with its own name.
+SERVICE_NAME = "hub"
 
 # Required: the process must not start without them (docs/03 section 7.2).
 SECRET_KEY = env.str("HUB_SECRET_KEY")  # used by Django internals only, never for tokens
@@ -40,6 +43,23 @@ HUB_METRICS_PORT = env.int("HUB_METRICS_PORT", default=9102)
 HUB_PROBLEM_BASE_URL = env.str(
     "HUB_PROBLEM_BASE_URL", default="https://hub.soleilgrid.example/problems/"
 )
+
+# --- logging (docs/03 section 7.4, docs/09 section 6) -----------------------------------
+# Django's DEFAULT_LOGGING puts a plain console handler on `django` and `django.server`,
+# which would print a second, non-JSON copy of every record it sees. The format itself is
+# owned by `hub.shared.logging.configure_logging` (one ProcessorFormatter on the root
+# handler, every stdlib logger propagating to it), so the entrypoints configure; this dict
+# only empties Django's own handler lists, and is applied by django.setup() right after
+# DEFAULT_LOGGING. Without configure_logging (manage.py) records fall through to the root
+# handler set by the process's logging configuration.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "loggers": {
+        "django": {"handlers": [], "level": "INFO", "propagate": True},
+        "django.server": {"handlers": [], "level": "INFO", "propagate": True},
+    },
+}
 
 # --- surface: no admin, no sessions, no contenttypes (ADR-0019, D-42, docs/03 1.2) ------
 INSTALLED_APPS = [
