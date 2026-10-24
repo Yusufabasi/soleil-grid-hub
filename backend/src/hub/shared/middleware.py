@@ -2,8 +2,8 @@
 
 ``RequestContextMiddleware`` is first: it accepts or replaces the inbound request id, binds
 the request context, records request metrics and clears the context again in ``finally``.
-``DomainErrorMiddleware`` is last: it turns a ``DomainError`` into an RFC 9457 problem
-document (task 00.5); until then it passes the response through untouched.
+``DomainErrorMiddleware`` is last: it turns a ``DomainError`` raised by a plain view into an
+RFC 9457 problem document; DRF views are converted by the exception handler instead.
 """
 
 from __future__ import annotations
@@ -16,7 +16,9 @@ from django.conf import settings
 from django.http import HttpRequest, HttpResponse
 
 from hub.bootstrap import get_container
-from hub.shared.context import bind_context, reset_context
+from hub.shared.api.problem import problem_response, retry_after, to_problem
+from hub.shared.context import bind_context, request_id_var, reset_context
+from hub.shared.errors import DomainError
 from hub.shared.metrics import HTTP_DURATION, HTTP_REQUESTS
 
 GetResponse = Callable[[HttpRequest], HttpResponse]
@@ -76,10 +78,26 @@ class RequestContextMiddleware:
 
 
 class DomainErrorMiddleware:
-    """Placeholder until task 00.5 maps DomainError to problem+json."""
+    """Convert a ``DomainError`` raised by a plain view into problem+json (docs/03 7.1).
+
+    DRF views never reach here: their exceptions go through ``exception_handler``, which
+    applies the same converter. Non-domain exceptions propagate so Django's ``handler500``
+    can answer with the generic internal error.
+    """
 
     def __init__(self, get_response: GetResponse) -> None:
         self.get_response = get_response
 
     def __call__(self, request: HttpRequest) -> HttpResponse:
         return self.get_response(request)
+
+    def process_exception(self, request: HttpRequest, exception: Exception) -> HttpResponse | None:
+        if not isinstance(exception, DomainError):
+            return None
+        status, body = to_problem(
+            exception,
+            instance=request.path,
+            request_id=request_id_var.get() or "",
+            accept_language=request.headers.get("Accept-Language"),
+        )
+        return problem_response(status, body, retry_after_seconds=retry_after(exception))

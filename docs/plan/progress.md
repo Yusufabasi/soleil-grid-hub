@@ -12,8 +12,8 @@ of the slice.
 | 00.1 | Repository scaffolding, tooling and Makefile | done | `60db793` | `python -m pytest tests/test_infra_skeleton.py -q` -> `2 passed`; `make -n lint` exit 0 |
 | 00.2 | Django project, settings modules, entrypoints, config checker | done | `1980883` | `cd backend && python -m pytest tests/architecture -q` -> `41 passed`; `python tools/check_django_config.py` -> exit 0 (9.4 s, runs `check --deploy` per module + `makemigrations --check`); ruff, ruff format, mypy strict clean
 | 00.3 | Clock, IdGenerator, config helpers, container | done | `57d66eb` | `cd backend && python -m pytest tests/unit/shared -q` -> `12 passed`; mypy strict, ruff and ruff format clean
-| 00.4 | Structured logging, request context, metrics, tracing | done | `pending` | `cd backend && python -m pytest tests/unit/shared -q` -> `30 passed` (11 new); `pytest tests/unit tests/architecture -q` -> `71 passed`; ruff, ruff format, mypy strict clean; `python tools/check_django_config.py` -> exit 0 |
-| 00.5 | Error taxonomy and problem+json handler | not started | — | `cd backend && python -m pytest tests/unit/shared/test_problem.py -q` |
+| 00.4 | Structured logging, request context, metrics, tracing | done | `181110d` | `cd backend && python -m pytest tests/unit/shared -q` -> `30 passed` (11 new); `pytest tests/unit tests/architecture -q` -> `71 passed`; ruff, ruff format, mypy strict clean; `python tools/check_django_config.py` -> exit 0 |
+| 00.5 | Error taxonomy and problem+json handler | done | `PENDING` | `cd backend && python -m pytest tests/unit/shared/test_problem.py -q` -> `7 passed`; `pytest tests/unit tests/architecture -q` -> `78 passed`; mypy strict, ruff, ruff format clean |
 | 00.6 | Health endpoints and readiness registry | not started | — | `cd backend && python -m pytest tests/integration/shared/test_health.py -q` |
 | 00.7 | DjangoUnitOfWork, outbox writer, worker command stubs | not started | — | `cd backend && python -m pytest tests/integration/shared/test_uow.py tests/unit/shared/test_commands.py -q` |
 | 00.8 | SQL baseline migration mechanism (`hubdb`) | not started | — | `cd backend && python -m pytest tests/integration/hubdb -q -m integration` |
@@ -38,6 +38,18 @@ of the slice.
   local `.env` exists, because `env.load()` re-populates the variable it deletes from the
   environment — and `make env`/`make up` always create that file. The test now stubs the
   `.env` loader so it proves the environment check itself.
+- **00.5 problem `type` base URL (slice `[open]`)**: the default
+  `https://hub.soleilgrid.example/problems/` is used (from `HUB_PROBLEM_BASE_URL` in
+  `settings/base`, `.env.example` documents it). A problem `type` is
+  `<base><code>`, e.g. `https://hub.soleilgrid.example/problems/not_found`.
+- **00.5 `DomainError.__init__` signature**: the slice shows `DomainError(code, message_key,
+  details)`; implemented as `__init__(code=None, *, message_key=None, details=None)` with
+  class-level defaults per subclass, so `NotFound()` alone carries its catalogue code
+  (`not_found`) and a module can pass a specific code (`customer_not_found`) plus an
+  optional `details["errors"]` list that becomes the problem body's `errors[]`.
+- **00.5 `Retry-After` on 503**: docs/05 requires `Retry-After` on 429 and 503; any 429/503
+  problem response carries it (error-provided hint, else `retry_after_seconds` on
+  `RateLimited`, else 30 s).
 
 ## Open change requests
 
