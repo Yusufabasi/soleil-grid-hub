@@ -1,0 +1,106 @@
+# Soleil Grid Hub backend: one distribution `hub`, src layout, uv managed (ADR-0019, ADR-0020).
+# Dependencies are pinned exactly by uv.lock; `uv export --require-hashes` feeds the image build.
+
+[project]
+name = "hub"
+version = "0.1.0"
+description = "Soleil Grid Hub backend (Django 5 + Django REST framework)"
+requires-python = ">=3.12"
+dependencies = [
+    "django>=5.2,<5.3",
+    "djangorestframework>=3.16",
+    "psycopg[binary]>=3.2",
+    "gunicorn>=23.0",
+    "uvicorn>=0.34",
+    "redis>=5.0",
+    "django-environ>=0.12",
+    "structlog>=25.1",
+    "prometheus-client>=0.22",
+    "opentelemetry-api>=1.30",
+    "opentelemetry-sdk>=1.30",
+    "opentelemetry-exporter-otlp>=1.30",
+    "opentelemetry-instrumentation-django>=0.51b0",
+    "opentelemetry-instrumentation-psycopg>=0.51b0",
+    "opentelemetry-instrumentation-redis>=0.51b0",
+    "pyyaml>=6.0",
+    # UUIDv7 generator (docs/03 2.1): pinned exactly because it is security-adjacent.
+    "uuid-utils==1.1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-django>=4.10",
+    "pytest-xdist>=3.6",
+    "hypothesis>=6.120",
+    "testcontainers>=4.9",
+    "ruff>=0.17",
+    "mypy>=1.18",
+    "django-stubs>=5.2",
+    "djangorestframework-stubs>=3.16",
+    "import-linter>=2.5",
+    "pip-audit>=2.8",
+    "bandit>=1.8",
+    "jsonschema>=4.23",
+    "openapi-spec-validator>=0.7",
+    "types-pyyaml>=6.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hub"]
+
+# --- ruff: E, F, I, B, UP, S, DJ, a PL subset (docs/03 section 9) ---------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "DJ", "PLC", "PLE", "PLW", "TID"]
+# E501 is owned by `ruff format`, which wraps code; it cannot wrap long string literals.
+ignore = ["E501"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+# Banned in every module: business code takes time from the Clock port and ids from
+# IdGenerator (docs/03 section 0 rule 5). The kernel adapters below are the exceptions.
+"datetime.now" = { msg = "use the Clock port (hub.shared.ports.Clock) instead of datetime.now" }
+"datetime.utcnow" = { msg = "use the Clock port (hub.shared.ports.Clock) instead of datetime.utcnow" }
+"uuid.uuid4" = { msg = "use the IdGenerator port (hub.shared.ports.IdGenerator) instead of uuid.uuid4" }
+"random" = { msg = "use secrets or an injected port instead of the random module" }
+
+[tool.ruff.lint.per-file-ignores]
+# The one place wall-clock time is read, and the deterministic test doubles.
+"src/hub/shared/clock.py" = ["TID251"]
+"src/hub/shared/ids.py" = ["TID251"]
+"tests/**" = ["S", "TID251"]
+"tools/**" = ["S404", "S602", "S603", "S607", "TID251"]
+
+# --- mypy strict with django-stubs (docs/03 section 9) --------------------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["mypy_django_plugin", "mypy_drf_plugin"]
+mypy_path = "$MYPY_CONFIG_FILE_DIR/src"
+namespace_packages = true
+explicit_package_bases = true
+show_error_codes = true
+exclude = "(?x)(^/.*/migrations/)"
+files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_decorators = false
+
+# --- pytest (docs/10 section 7.1) ----------------------------------------------------------
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "hub.settings.test"
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+    "integration: needs Docker (testcontainers Postgres, Redis) or the compose stack",
+    "tc(id): traceability id from docs/10-test-strategy.md section 8",
+]

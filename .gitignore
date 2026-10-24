@@ -1,0 +1,34 @@
+# environments and secrets - never commit a populated .env
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+.tools/
+
+# python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.egg-info/
+
+# node / frontend
+node_modules/
+.next/
+frontend/coverage/
+*.tsbuildinfo
+
+# generated runtime files
+infra/docker/pgbouncer/userlist.txt
+
+# logs and editors
+*.log
+.DS_Store
+.idea/
+.vscode/
