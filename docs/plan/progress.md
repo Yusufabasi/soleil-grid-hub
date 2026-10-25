@@ -1,7 +1,8 @@
 # Progress: Soleil Grid Hub build
 
 Executor: implementing agent. Guide: `docs/plan/00-executor-guide.md`. Slice complete: **00**
-(`docs/plan/slice-00-walking-skeleton.md`). Update this file after every task (status, commit,
+(`docs/plan/slice-00-walking-skeleton.md`). Slice in progress: **01**
+(`docs/plan/slice-01-identity-rbac-approvals.md`). Update this file after every task (status, commit,
 test command and its summary line) and paste the full `make verify SLICE=00` output at the end
 of the slice.
 
@@ -22,7 +23,50 @@ of the slice.
 | 00.11 | CI pipeline, security scans, verify script | done | `f027004` (contract fix `b33070f`) | `python -m pytest tests/test_infra_skeleton.py -q` -> `8 passed` (2 new: required jobs, SHA pins and read-only token, oasdiff behind a tag condition, frontend guarded by `hashFiles`, security scanners, verify plan in order); `actionlint 1.7.12 .github/workflows/ci.yml` -> exit 0; `gitleaks 8.30.1 detect --config .gitleaks.toml` -> `no leaks found` (17 commits); `npx @stoplight/spectral-cli@6 lint api/openapi.yaml` -> `0 errors, 118 warnings`, exit 0; root `python -m pytest tests -q` -> `42 passed, 1 deselected`; `make lint` -> exit 0 |
 | 00.12 | End-to-end verification, demo and evidence | done | `3153167` (defects fixed in `daeef46`, `938f2b3`) | `python -m pytest tests/test_stack_up.py -q -m integration` -> `5 passed` (five pools routed, request id owned by the balancer, stats UP, one JSON line per request with its trace id, no credential in the logs); `make verify SLICE=00` -> `Slice 00 verification PASSED (11 commands)`, exit 0; four failures observed first with the stack down (connection refused, empty logs) |
 
+## Task log — slice 01
+
+| Task | Scope | Status | Commit | Test command and result |
+|---|---|---|---|---|
+| 01.1 | Unmanaged identity models and the permission class | done | `9bb28a3` | `cd backend && python -m pytest tests/architecture/test_permissions_yaml.py tests/architecture/test_identity_models.py -q` -> `10 passed`; `pytest tests/unit tests/architecture -q` -> `108 passed`; `pytest tests/integration -q -m integration` -> `31 passed`; root `pytest tests -q` -> `42 passed, 5 deselected`; `make lint` -> exit 0 (ruff, format, mypy strict, import-linter 119 kept, Django config checks) |
+| 01.2 | Audit adapter and audit view | not started | — | — |
+| 01.3 | EdDSA access tokens and bearer authentication | not started | — | — |
+| 01.4 | Refresh sessions, cookie views and CSRF guard | not started | — | — |
+| 01.5 | Local break-glass login, TOTP, recovery codes | not started | — | — |
+| 01.6 | WebAuthn registration, assertion, enforcement | not started | — | — |
+| 01.7 | OIDC code exchange in hub-api | not started | — | — |
+| 01.8 | Step-up, `/me`, locale in the principal | not started | — | — |
+| 01.9 | ApprovalService, executor registry, conflict check | not started | — | — |
+| 01.10-01.12 | (see slice file: customer OTP, user admin, wiring) | not started | — | — |
+
 ## Assumptions
+
+- **01.1 `Principal` carries one instant, two names**: the slice asks for the docs/03 2.2
+  fields *plus* `acr` and `auth_time`. `auth_time` is the field (it is the JWT claim) and
+  `stepped_up_at` is a property over it, so a step-up and a login cannot disagree about when
+  identity was last proven. `acr` defaults to `pwd`; docs/05 requires at least `mfa`.
+- **01.1 the kernel does not import `identity`**: `PermissionsYamlPermission` needs the caller,
+  and `hub.shared` is forbidden from importing any business module (import-linter contract
+  "hub.shared imports no business module"). `shared/api/permissions.py` therefore declares a
+  `PrincipalLike` Protocol with the four fields it reads and duck-types `request.principal`;
+  `identity.contracts.Principal` satisfies it structurally.
+- **01.1 two Django lint rules are suppressed with a reason**: `DJ001` (no `null=True` on text
+  fields) on the four columns `db/schema.sql` makes nullable — `users.password_hash`,
+  `users.idp_subject`, `refresh_tokens.user_agent`, `audit_log.request_id` — because `""` is a
+  value the schema's checks would have to accept; `DJ008` is satisfied once by an abstract
+  `UnmanagedShim` base that defines `__str__`.
+- **01.1 composite primary keys**: `role_permissions`, `user_roles`, `user_sites` and
+  `staff_customer_link` have two-column keys Django cannot express, so the first column is the
+  model's key and the repositories always address the row by the pair. Foreign keys that cross
+  a module boundary (`customer_id`, `site_id`) are plain uuid columns: importing another
+  module's models is forbidden.
+- **01.1 contract path and user model are settings**: `HUB_CONTRACT_DIR` (derived from
+  `HUB_REPO_ROOT`) is where the permission class reads `permissions.yaml` and `openapi.yaml`,
+  and `AUTH_USER_MODEL = "identity.User"` names the shim for any `get_user_model()` call.
+  Neither adds an environment variable.
+- **01.1 tests beyond the plan's three**: the plan names the completeness test, the
+  role-denial test and the undeclared-view test. Two more pin the other two outcomes of the
+  same class (the listed role is allowed, no principal is 401), so the 401/403/200 triangle is
+  covered rather than inferred.
 
 - **00.4 `SERVICE_NAME`**: the log lines and `http_requests_total{service,...}` series need a
   per-deployable label (docs/09 uses `service="hub-ingest"`), so each settings module sets a
