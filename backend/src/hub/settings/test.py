@@ -10,6 +10,7 @@ staging settings, never in production (A-19).
 import os
 
 _TEST_DEFAULTS = {
+    "HUB_ENV": "test",
     "HUB_SECRET_KEY": "test-settings-only-not-a-secret-0123456789-abcdefghijkl",
     "HUB_ALLOWED_HOSTS": "localhost",
     "SITE_ORIGIN": "http://localhost:8080",

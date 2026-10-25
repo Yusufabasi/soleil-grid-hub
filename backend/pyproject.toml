@@ -25,6 +25,12 @@ dependencies = [
     "pyyaml>=6.0",
     # UUIDv7 generator (docs/03 2.1): pinned exactly because it is security-adjacent.
     "uuid-utils==1.1.0",
+    "pyjwt>=2.10",
+    "cryptography>=44",
+    "argon2-cffi>=23.1",
+    "pyotp>=2.9",
+    "authlib>=1.4.1",
+    "webauthn>=2.5",
 ]
 
 [dependency-groups]

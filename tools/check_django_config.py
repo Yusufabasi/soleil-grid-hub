@@ -68,6 +68,18 @@ FALLBACK_ENV = {
     "HUB_MIGRATE_URL": "postgresql+psycopg://migrator:dev@localhost:5432/hub",
     "HUB_TEST_DB_URL": "postgresql+psycopg://hub_api:dev@localhost:5432/hub_test",
     "HUB_INGEST_ROLE": "webhooks",
+    # A throwaway Ed25519 pair, like the secret key above: the settings module refuses to
+    # start outside local/test without one, and this checker only needs the module to load.
+    "HUB_JWT_PRIVATE_KEY": (
+        "-----BEGIN PRIVATE KEY-----\\n"
+        "MC4CAQAwBQYDK2VwBCIEIIfaJcL0pbmnIF1KX2nC+hKDxyF7umDjusdz9gCDkfGV\\n"
+        "-----END PRIVATE KEY-----\\n"
+    ),
+    "HUB_JWT_PUBLIC_KEY": (
+        "-----BEGIN PUBLIC KEY-----\\n"
+        "MCowBQYDK2VwAyEAN5yjkgfBkSAL5fLYUkD0IpCovciLWbQJuz/FkQC0aUY=\\n"
+        "-----END PUBLIC KEY-----\\n"
+    ),
 }
 
 

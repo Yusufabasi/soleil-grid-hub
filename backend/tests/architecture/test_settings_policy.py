@@ -97,7 +97,11 @@ def test_json_renderer_only_and_no_unauthenticated_user(load, module):
         "rest_framework.renderers.JSONRenderer"
     ]
     assert settings.REST_FRAMEWORK["UNAUTHENTICATED_USER"] is None
-    assert settings.REST_FRAMEWORK["DEFAULT_AUTHENTICATION_CLASSES"] == []
+    # Slice 00 shipped with no authentication class; slice 01 installs exactly one, and it is
+    # the EdDSA bearer class — never a session or basic scheme (D-17).
+    assert settings.REST_FRAMEWORK["DEFAULT_AUTHENTICATION_CLASSES"] == [
+        "hub.identity.api.authentication.BearerJwtAuthentication"
+    ]
     assert settings.REST_FRAMEWORK["DEFAULT_PERMISSION_CLASSES"] == []
     assert settings.REST_FRAMEWORK["EXCEPTION_HANDLER"] == (
         "hub.shared.api.problem.exception_handler"

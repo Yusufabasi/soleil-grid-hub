@@ -1,0 +1,219 @@
+"""Repositories over the identity tables (ADR-0020: plain SQL, no ORM writes).
+
+Every class here is an adapter: it speaks SQL, returns DTOs and raises kernel errors, and the
+application layer sees it through a Protocol in ``identity.contracts``. Reads of the identity
+tables are plain ``SELECT``; the one write that changes authority (``bump_token_version``)
+goes through the database as an ``UPDATE`` of a single column, which is the only thing a role
+change needs to invalidate every access token a user holds (D-17).
+
+The token version is cached for sixty seconds because it is read on *every* request: without
+it each call would cost a query, and with it a revocation still takes effect within a minute.
+``bump_token_version`` deletes the key, so a change made by this process is immediate.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, cast
+from uuid import UUID
+
+from django.db import connection
+
+from hub.identity.application.tokens import TokenClaims
+from hub.identity.domain.principal import Locale, Principal
+from hub.shared.contracts import KeyValueStore
+from hub.shared.errors import Unauthenticated
+
+__all__ = ["TOKEN_VERSION_TTL_SECONDS", "UserRecord", "UserRepository"]
+
+# How long a token version may be stale; a bump deletes the key, so this bounds only the
+# window in which another process's bump is not yet visible.
+TOKEN_VERSION_TTL_SECONDS = 60
+
+# The column list is a literal and the predicates below are constants, so the only values a
+# statement carries are bound parameters (executor guide rule 7).
+_USER_SELECT = (
+    "SELECT u.id, u.email, u.display_name, u.password_hash, u.idp_subject, u.mfa_secret_enc, "
+    "u.mfa_enrolled_at, u.status, u.preferred_language, u.all_sites, u.finance_lead, "
+    "u.dp_admin, u.token_version, u.last_login_at FROM hub.users u"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class UserRecord:
+    """The row a login flow needs, without the ORM and without surprises."""
+
+    id: UUID
+    email: str
+    display_name: str
+    password_hash: str | None
+    idp_subject: str | None
+    mfa_secret_enc: bytes | None
+    mfa_enrolled_at: datetime | None
+    status: str
+    preferred_language: str
+    all_sites: bool
+    finance_lead: bool
+    dp_admin: bool
+    token_version: int
+    last_login_at: datetime | None
+
+    @property
+    def attributes(self) -> frozenset[str]:
+        held = {
+            name
+            for name, value in (
+                ("finance_lead", self.finance_lead),
+                ("dp_admin", self.dp_admin),
+            )
+            if value
+        }
+        return frozenset(held)
+
+    @property
+    def locale(self) -> str:
+        return "fr" if self.preferred_language == "fr" else "en"
+
+    @property
+    def mfa_enrolled(self) -> bool:
+        return self.mfa_secret_enc is not None or self.mfa_enrolled_at is not None
+
+
+def _record(row: Any) -> UserRecord:
+    values = tuple(row)
+    return UserRecord(
+        id=cast("UUID", values[0]),
+        email=str(values[1]),
+        display_name=str(values[2]),
+        password_hash=cast("str | None", values[3]),
+        idp_subject=cast("str | None", values[4]),
+        mfa_secret_enc=bytes(values[5]) if values[5] is not None else None,
+        mfa_enrolled_at=cast("datetime | None", values[6]),
+        status=str(values[7]),
+        preferred_language=str(values[8]),
+        all_sites=bool(values[9]),
+        finance_lead=bool(values[10]),
+        dp_admin=bool(values[11]),
+        token_version=int(values[12]),
+        last_login_at=cast("datetime | None", values[13]),
+    )
+
+
+class UserRepository:
+    """Reads of ``hub.users`` and the small writes the session flows need."""
+
+    def __init__(self, store: KeyValueStore) -> None:
+        self._store = store
+
+    # --- reads -------------------------------------------------------------------------
+    def get(self, user_id: UUID) -> UserRecord | None:
+        with connection.cursor() as cursor:
+            cursor.execute(_USER_SELECT + " WHERE u.id = %s AND u.deleted_at IS NULL", [user_id])
+            row = cursor.fetchone()
+        return _record(row) if row is not None else None
+
+    def find_by_email(self, email: str) -> UserRecord | None:
+        """Case-insensitive lookup; ``ck_users_email_lower`` guarantees one row at most."""
+        with connection.cursor() as cursor:
+            cursor.execute(
+                _USER_SELECT + " WHERE u.email = lower(%s) AND u.deleted_at IS NULL",
+                [email.strip()],
+            )
+            row = cursor.fetchone()
+        return _record(row) if row is not None else None
+
+    def find_by_idp_subject(self, subject: str) -> UserRecord | None:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                _USER_SELECT + " WHERE u.idp_subject = %s AND u.deleted_at IS NULL",
+                [subject],
+            )
+            row = cursor.fetchone()
+        return _record(row) if row is not None else None
+
+    def roles_of(self, user_id: UUID) -> frozenset[str]:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT role_code FROM hub.user_roles WHERE user_id = %s", [user_id])
+            return frozenset(str(row[0]) for row in cursor.fetchall())
+
+    def site_ids_of(self, user_id: UUID) -> frozenset[UUID]:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT site_id FROM hub.user_sites WHERE user_id = %s", [user_id])
+            return frozenset(cast("UUID", row[0]) for row in cursor.fetchall())
+
+    def permissions_of(self, user_id: UUID) -> frozenset[str]:
+        """The role permissions of the user, for the authorizer (docs/03 2.2)."""
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT DISTINCT rp.permission_code FROM hub.user_roles ur "
+                "JOIN hub.role_permissions rp ON rp.role_code = ur.role_code "
+                "WHERE ur.user_id = %s",
+                [user_id],
+            )
+            return frozenset(str(row[0]) for row in cursor.fetchall())
+
+    def token_version(self, user_id: UUID) -> int | None:
+        """The account's token version, cached for a minute (``None``: no such account)."""
+        key = self._version_key(user_id)
+        cached = self._store.get(key)
+        if cached is not None:
+            return int(cached)
+        record = self.get(user_id)
+        if record is None:
+            return None
+        self._store.set(key, str(record.token_version), ttl_seconds=TOKEN_VERSION_TTL_SECONDS)
+        return record.token_version
+
+    # --- writes ------------------------------------------------------------------------
+    def bump_token_version(self, user_id: UUID) -> int:
+        """Invalidate every access token of this user and drop the cache immediately."""
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE hub.users SET token_version = token_version + 1 WHERE id = %s "
+                "RETURNING token_version",
+                [user_id],
+            )
+            row = cursor.fetchone()
+        if row is None:
+            raise Unauthenticated()
+        self._store.delete(self._version_key(user_id))
+        return int(row[0])
+
+    def mark_login(self, user_id: UUID, instant: datetime) -> None:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE hub.users SET last_login_at = %s WHERE id = %s", [instant, user_id]
+            )
+
+    # --- the principal ---------------------------------------------------------------
+    def load_principal(self, claims: TokenClaims) -> Principal:
+        """Build the caller the request acts for, refusing a stale token version.
+
+        The token proves *who*; this method decides whether that identity is still current
+        and what it may do. Suspension and deletion are checked here, never in the token.
+        """
+        record = self.get(claims.subject_id)
+        if record is None or record.status != "active":
+            raise Unauthenticated(code="token_revoked")
+        current = self.token_version(claims.subject_id)
+        if current is None or current != claims.token_version:
+            raise Unauthenticated(code="token_revoked")
+        return Principal(
+            subject_id=record.id,
+            kind=cast("Any", claims.kind),
+            roles=self.roles_of(record.id),
+            attributes=record.attributes,
+            permissions=self.permissions_of(record.id),
+            site_ids=self.site_ids_of(record.id),
+            customer_id=None,
+            session_id=claims.session_id,
+            token_version=record.token_version,
+            auth_time=claims.auth_time,
+            acr=claims.acr,
+            locale=cast("Locale", record.locale),
+        )
+
+    @staticmethod
+    def _version_key(user_id: UUID) -> str:
+        return f"tv:{user_id}"

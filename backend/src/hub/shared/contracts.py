@@ -20,7 +20,7 @@ from uuid import UUID
 
 from hub.shared.events import DomainEvent
 
-__all__ = ["OutboxWriter", "PrincipalContext", "UnitOfWork"]
+__all__ = ["KeyValueStore", "OutboxWriter", "PrincipalContext", "UnitOfWork"]
 
 
 @dataclass(frozen=True)
@@ -29,6 +29,31 @@ class PrincipalContext:
 
     user_id: UUID | None = None
     customer_id: UUID | None = None
+
+
+class KeyValueStore(Protocol):
+    """Short-lived, self-expiring facts (Redis): challenges, counters, cached token versions.
+
+    Nothing here is authoritative. Every value has a TTL and every consumer treats a miss as
+    "ask the database" (a token version) or "refuse" (a challenge), so losing Redis degrades
+    the API rather than corrupting it.
+    """
+
+    def get(self, key: str) -> str | None: ...
+
+    def set(self, key: str, value: str, *, ttl_seconds: int | None = None) -> None: ...
+
+    def delete(self, key: str) -> None: ...
+
+    def incr(self, key: str, *, ttl_seconds: int | None = None) -> int: ...
+
+    def add_once(self, key: str, value: str, *, ttl_seconds: int) -> bool:
+        """Set ``key`` only if absent; True when this call created it (SET NX EX)."""
+        ...
+
+    def pop(self, key: str) -> str | None:
+        """Return the value and delete the key in one round trip (GETDEL)."""
+        ...
 
 
 class OutboxWriter(Protocol):

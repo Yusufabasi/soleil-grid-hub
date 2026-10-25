@@ -18,15 +18,18 @@ import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 import psycopg
 import pytest
+import redis
 from django.conf import settings
 from django.db import connections
 from testcontainers.community.postgres import PostgresContainer
 from testcontainers.community.redis import RedisContainer
 
+from hub.identity import wiring
 from hub.settings.base import build_database
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -123,6 +126,25 @@ def redis_url() -> Iterator[str]:
         host = redis.get_container_host_ip()
         port = redis.get_exposed_port(6379)
         yield f"redis://{host}:{port}/0"
+
+
+@pytest.fixture
+def redis_store(settings: Any, redis_url: str) -> Iterator[redis.Redis]:
+    """Point the identity wiring at the session Redis and start from an empty one.
+
+    The wiring caches its adapters per process, so the settings override has to be followed by
+    :func:`hub.identity.wiring.reset`; a test that changes ``HUB_REDIS_URL`` would otherwise keep
+    talking to the previous client.
+    """
+    settings.HUB_REDIS_URL = redis_url
+    wiring.reset()
+    client: redis.Redis = redis.Redis.from_url(redis_url, decode_responses=True)
+    client.flushdb()
+    try:
+        yield client
+    finally:
+        client.flushdb()
+        wiring.reset()
 
 
 @pytest.fixture(scope="session")

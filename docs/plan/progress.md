@@ -29,7 +29,7 @@ of the slice.
 |---|---|---|---|---|
 | 01.1 | Unmanaged identity models and the permission class | done | `9bb28a3` | `cd backend && python -m pytest tests/architecture/test_permissions_yaml.py tests/architecture/test_identity_models.py -q` -> `10 passed`; `pytest tests/unit tests/architecture -q` -> `108 passed`; `pytest tests/integration -q -m integration` -> `31 passed`; root `pytest tests -q` -> `42 passed, 5 deselected`; `make lint` -> exit 0 (ruff, format, mypy strict, import-linter 119 kept, Django config checks) |
 | 01.2 | Audit adapter and audit view | done | `1326c43` (prerequisite fix `50e8ac9`, refactor `d9b9275`) | `cd backend && python -m pytest tests/integration/identity/test_audit.py tests/integration/admin/test_audit_view.py -q` -> `14 passed` (chained seq and prev_hash, actor and address stored without personal details, deny-list refused, outcome lifted out of details, `hub_api` cannot UPDATE or DELETE, a tampered row reported at its exact seq, an anchor that no longer matches the head reported, administrator page plus its own `audit.read`, support agent 403 writing nothing, cursor paging, tampered cursor 400, missing stream 400, action prefix); `pytest -q` -> `153 passed, 0 skipped`; root `pytest tests -q` -> `42 passed, 5 deselected`; `make lint` -> exit 0 (ruff, format, mypy strict 176 files, import-linter 119 kept, Django config checks); `check_traceability.py` -> 0 errors; `openapi.yaml` valid |
-| 01.3 | EdDSA access tokens and bearer authentication | not started | — | — |
+| 01.3 | EdDSA access tokens and bearer authentication | done | see below | `cd backend && python -m pytest tests/unit/identity/test_tokens.py tests/integration/identity/test_bearer.py -q` -> `18 passed` (600 s lifetime and claim set, no roles claim, `alg: none` refused, HS256 key confusion refused, leeway boundary on a frozen clock, edited payload refused, foreign issuer and over-long lifetime refused; live token authenticates, missing/garbage/non-bearer 401, stale `tv` 401 `token_revoked` with a warm and a cold cache, suspended and soft-deleted users refused, authority read from the database after a grant); `pytest -q` -> `171 passed`; `make lint` -> exit 0 (ruff, format, mypy strict 183 files, import-linter 119 kept, Django config checks) |
 | 01.4 | Refresh sessions, cookie views and CSRF guard | not started | — | — |
 | 01.5 | Local break-glass login, TOTP, recovery codes | not started | — | — |
 | 01.6 | WebAuthn registration, assertion, enforcement | not started | — | — |
@@ -102,6 +102,23 @@ of the slice.
   (so its own JSONField can apply a custom decoder), so the adapter parses `details` and
   `record` still dumps with `Jsonb`.
   Neither adds an environment variable.
+- **01.3 an ephemeral signing key pair in local and test, a hard failure elsewhere**:
+  `HUB_JWT_PRIVATE_KEY`/`HUB_JWT_PUBLIC_KEY` are the only signing authority, and
+  `settings/base` raises `ImproperlyConfigured` when they are missing outside `local`/`test`.
+  In those two environments it mints a fresh Ed25519 pair at import so `make up` needs no
+  secret in the repository; that is why a token is only valid within the process that issued
+  it (fine for a single `hub-api` container locally, and the reason a real deployment sets
+  both variables). `tools/check_django_config.py` carries a throwaway pair in its fallback
+  environment, like its throwaway `HUB_SECRET_KEY`, so `--deploy` checks can load the module.
+- **01.3 time is judged against the injected clock, not PyJWT's**: `jwt.decode` is told not to
+  verify `exp`/`iat`/`nbf`; `AccessTokenService.verify` compares them with `Clock.now()` and the
+  configured 30-second leeway. PyJWT would otherwise use the wall clock, which makes the
+  leeway boundary untestable and makes the verifier disagree with the rest of the codebase
+  about what "now" is.
+- **01.3 the principal carries its permissions**: `Principal.permissions` is filled from
+  `role_permissions` on every authentication, alongside roles, attributes and sites. One
+  query more, no cache to invalidate, and the audit adapter's `audit.read` check stays the
+  second line of defence it already was.
 - **01.1 tests beyond the plan's three**: the plan names the completeness test, the
   role-denial test and the undeclared-view test. Two more pin the other two outcomes of the
   same class (the listed role is allowed, no principal is 401), so the 401/403/200 triangle is
