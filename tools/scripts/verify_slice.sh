@@ -37,11 +37,12 @@ case "${SLICE}" in
       "cd backend && python -m pytest tests/integration -q -m integration -p no:cacheprovider --strict-markers -rs"
       "python -m pytest tests -q"
       "python tools/check_traceability.py"
+      # `check_django_config.py` runs `manage.py check --deploy --fail-level WARNING` for every
+      # settings module (the Verification list's step 6) with the fallback environment a
+      # deployment has. Running the four commands bare would load the checkout's .env, find
+      # HUB_ENV=local and fail on DEBUG - a warning about the developer's own shell, not the
+      # deployable.
       "python tools/check_django_config.py"
-      "cd backend && python manage.py check --deploy --fail-level WARNING --settings=hub.settings.api"
-      "cd backend && HUB_INGEST_ROLE=webhooks python manage.py check --deploy --fail-level WARNING --settings=hub.settings.ingest"
-      "cd backend && python manage.py check --deploy --fail-level WARNING --settings=hub.settings.worker"
-      "cd backend && python manage.py check --deploy --fail-level WARNING --settings=hub.settings.stream"
       "cd backend && python manage.py makemigrations --check --dry-run --settings=hub.settings.api"
       "make up"
       "python -m pytest tests/test_stack_up.py -q -m integration"
