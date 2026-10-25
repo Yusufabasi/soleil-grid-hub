@@ -27,14 +27,18 @@ from hub.identity.api.cookie_views import (
 )
 from hub.identity.api.serializers import (
     LoginInput,
+    MeUpdateInput,
     MfaEnrollConfirmInput,
     MfaEnrollInput,
     MfaVerifyInput,
+    StepUpInput,
     WebAuthnAssertionInput,
     WebAuthnAssertionOptionsInput,
     WebAuthnRegistrationInput,
+    principal_document,
     token_pair_document,
 )
+from hub.identity.application.step_up import StepUpProof
 from hub.identity.contracts import Principal
 from hub.shared.api.permissions import PermissionsYamlPermission, operation
 from hub.shared.errors import Unauthenticated
@@ -42,10 +46,12 @@ from hub.shared.security import digest_token
 
 __all__ = [
     "ConfirmMfaEnrollmentView",
+    "MeView",
     "RegenerateRecoveryCodesView",
     "StaffLoginView",
     "StaffMfaVerifyView",
     "StartMfaEnrollmentView",
+    "StepUpView",
     "VerifyWebauthnAssertionView",
     "WebauthnAssertionOptionsView",
     "WebauthnRegistrationOptionsView",
@@ -251,16 +257,25 @@ class RegisterWebauthnCredentialView(APIView):
 
 
 class WebauthnAssertionOptionsView(APIView):
-    """`webauthnAssertionOptions`: a request challenge for the account in the mfa token."""
+    """`webauthnAssertionOptions`: a request challenge for a login, or for a step-up.
+
+    With ``mfa_token`` this is step two of a login and answers for the account the challenge
+    names. Without it the caller must already be signed in, and the challenge is issued for a
+    step-up: the op has no other way to reach the account, and a signed-in user still needs one
+    challenge per assertion.
+    """
 
     permission_classes = [PermissionsYamlPermission]
-    authentication_classes: list[Any] = []
 
     @operation("webauthnAssertionOptions")
     def post(self, request: Request) -> Response:
         payload = WebAuthnAssertionOptionsInput(data=request.data)
         payload.is_valid(raise_exception=True)
-        challenge = wiring.webauthn().assertion_options(str(payload.validated_data["mfa_token"]))
+        mfa_token = str(payload.validated_data.get("mfa_token") or "")
+        if mfa_token:
+            challenge = wiring.webauthn().assertion_options(mfa_token)
+        else:
+            challenge = wiring.webauthn().assertion_options_for(_principal(request).subject_id)
         return Response(
             {
                 "data": {
@@ -321,6 +336,91 @@ class VerifyWebauthnAssertionView(APIView):
 
 def _challenge_digest(mfa_token: str) -> str:
     return digest_token(mfa_token).hex()
+
+
+class StepUpView(APIView):
+    """`stepUp`: prove a second factor again and answer with a token aged to right now.
+
+    The session itself is untouched — same refresh token, same family — but its remembered
+    authentication instant moves, so a later refresh carries the step-up rather than silently
+    reverting to the login it replaced (D-16).
+    """
+
+    permission_classes = [PermissionsYamlPermission]
+
+    @operation("stepUp")
+    def post(self, request: Request) -> Response:
+        principal = _principal(request)
+        payload = StepUpInput(data=request.data)
+        payload.is_valid(raise_exception=True)
+        proof = StepUpProof(
+            method=str(payload.validated_data["method"]),
+            totp_code=payload.validated_data.get("totp_code"),
+            recovery_code=payload.validated_data.get("recovery_code"),
+            assertion=payload.validated_data.get("assertion"),
+        )
+        result = wiring.step_up().step_up(principal, proof, ip=_ip(request))
+        if principal.session_id is None:
+            raise Unauthenticated()
+        wiring.sessions().remember_authentication(
+            principal.session_id, auth_time=result.auth_time, acr=result.acr
+        )
+        stepped = wiring.users().build_principal(
+            principal.subject_id,
+            session_id=principal.session_id,
+            auth_time=result.auth_time,
+            acr=result.acr,
+        )
+        access = wiring.tokens().issue(
+            stepped,
+            session_id=principal.session_id,
+            auth_time=result.auth_time,
+            acr=result.acr,
+        )
+        return Response(
+            {
+                "data": token_pair_document(
+                    access_token=access,
+                    expires_in=int(settings.HUB_ACCESS_TTL_SECONDS),
+                    principal=stepped,
+                )
+            }
+        )
+
+
+class MeView(APIView):
+    """`getMe` and `updateMe`: the caller as every other response shows them."""
+
+    permission_classes = [PermissionsYamlPermission]
+
+    @operation("getMe")
+    def get(self, request: Request) -> Response:
+        return Response({"data": principal_document(_principal(request))})
+
+    @operation("updateMe")
+    def patch(self, request: Request) -> Response:
+        principal = _principal(request)
+        payload = MeUpdateInput(data=request.data)
+        payload.is_valid(raise_exception=True)
+        display_name = payload.validated_data.get("display_name")
+        locale = _supported_locale(payload.validated_data.get("locale"))
+        wiring.users().update_profile(
+            principal.subject_id, display_name=display_name, locale=locale
+        )
+        updated = wiring.users().build_principal(
+            principal.subject_id,
+            session_id=principal.session_id,
+            auth_time=principal.auth_time or wiring.clock().now(),
+            acr=principal.acr,
+        )
+        return Response({"data": principal_document(updated)})
+
+
+def _supported_locale(value: Any) -> str | None:
+    """``en`` or ``fr``; an unsupported value is stored as ``en`` rather than refused."""
+    if value is None:
+        return None
+    return "fr" if str(value).lower().startswith("fr") else "en"
 
 
 class RegenerateRecoveryCodesView(APIView):

@@ -43,6 +43,7 @@ def seed_local_user(
     attributes: tuple[str, ...] = (),
     site_ids: tuple[UUID, ...] = (),
     idp_subject: str | None = None,
+    locale: str = "en",
 ) -> LocalUser:
     user_id = uuid.uuid4()
     email = f"{user_id}@example.test"
@@ -56,7 +57,7 @@ def seed_local_user(
         mfa_secret_enc=encrypt_secret(secret) if mfa else None,
         mfa_enrolled_at=datetime.now(UTC) if mfa else None,
         status=status,
-        preferred_language="en",
+        preferred_language=locale,
         finance_lead="finance_lead" in attributes,
         dp_admin="dp_admin" in attributes,
         token_version=1,
@@ -79,6 +80,6 @@ def seed_local_user(
             site_ids=frozenset(site_ids),
             session_id=uuid.uuid4(),
             token_version=1,
-            locale="en",
+            locale="fr" if locale == "fr" else "en",
         ),
     )

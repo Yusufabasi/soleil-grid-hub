@@ -142,7 +142,14 @@ class WebauthnService:
 
     # --- assertion ----------------------------------------------------------------------
     def assertion_options(self, mfa_token: str) -> WebauthnChallenge:
-        user_id = self._challenge_user(mfa_token)
+        """Options for the second step of a login, bound to the challenge's account."""
+        return self._assertion_options(self._challenge_user(mfa_token), purpose="assertion")
+
+    def assertion_options_for(self, user_id: UUID) -> WebauthnChallenge:
+        """Options for a step-up: the caller is already signed in, so no mfa token is spent."""
+        return self._assertion_options(user_id, purpose="step_up")
+
+    def _assertion_options(self, user_id: UUID, *, purpose: str) -> WebauthnChallenge:
         credentials = self._users.webauthn_credentials(user_id)
         if not credentials:
             raise ValidationFailed(
@@ -164,14 +171,25 @@ class WebauthnService:
             ],
             user_verification=UserVerificationRequirement.REQUIRED,
         )
-        challenge_id = self._remember(options.challenge, purpose="assertion", user_id=user_id)
+        challenge_id = self._remember(options.challenge, purpose=purpose, user_id=user_id)
         return WebauthnChallenge(
             options=json.loads(options_to_json(options)), challenge_id=challenge_id
         )
 
     def assert_(self, mfa_token: str, challenge_id: UUID, credential: dict[str, Any]) -> UUID:
+        """Verify a login assertion and return the account it proves."""
         user_id = self._challenge_user(mfa_token)
-        challenge = self._consume(challenge_id, purpose="assertion", user_id=user_id)
+        self._verify_assertion(user_id, challenge_id, credential, purpose="assertion")
+        return user_id
+
+    def assert_for(self, user_id: UUID, challenge_id: UUID, credential: dict[str, Any]) -> None:
+        """Verify a step-up assertion for a signed-in account."""
+        self._verify_assertion(user_id, challenge_id, credential, purpose="step_up")
+
+    def _verify_assertion(
+        self, user_id: UUID, challenge_id: UUID, credential: dict[str, Any], *, purpose: str
+    ) -> None:
+        challenge = self._consume(challenge_id, purpose=purpose, user_id=user_id)
         raw_id = str(credential.get("rawId") or credential.get("id") or "")
         stored = self._users.find_webauthn_credential(base64url_to_bytes(raw_id))
         if stored is None:
@@ -191,7 +209,6 @@ class WebauthnService:
         self._users.touch_webauthn_credential(
             stored.id, sign_count=int(verified.new_sign_count), at=self._clock.now()
         )
-        return user_id
 
     # --- challenge storage --------------------------------------------------------------
     def _remember(self, challenge: bytes, *, purpose: str, user_id: UUID) -> UUID:

@@ -32,8 +32,9 @@ from uuid import UUID
 
 import jwt
 import requests
-# Authlib ships no type information and no stubs; the client is used through the small
-# surface below, which this module's own tests exercise end to end.
+
+# Authlib ships neither types nor stubs; the client is used through the small surface below,
+# which this module's own tests exercise end to end.
 from authlib.integrations.requests_client import OAuth2Session  # type: ignore[import-untyped]
 from jwt import InvalidTokenError, PyJWKSet
 from requests import RequestException

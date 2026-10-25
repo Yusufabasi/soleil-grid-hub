@@ -25,11 +25,13 @@ from hub.identity.application.local_login import (
 )
 from hub.identity.application.oidc import OidcLogin
 from hub.identity.application.sessions import SessionLimits, SessionService
+from hub.identity.application.step_up import StepUpService
 from hub.identity.application.tokens import AccessTokenService
 from hub.identity.application.webauthn import WebauthnService
 from hub.identity.contracts import AuditLog, Principal
 from hub.identity.infrastructure.audit import HubAuditLog
 from hub.identity.infrastructure.repositories import SessionRepository, UserRepository
+from hub.shared import clock as kernel_clock
 from hub.shared.clock import SystemClock
 from hub.shared.contracts import KeyValueStore
 from hub.shared.ids import Uuid7Generator
@@ -47,6 +49,7 @@ __all__ = [
     "oidc",
     "reset",
     "sessions",
+    "step_up",
     "store",
     "tokens",
     "unit_of_work",
@@ -67,15 +70,16 @@ _mfa: MfaService | None = None
 _enrollment: EnrollmentService | None = None
 _webauthn: WebauthnService | None = None
 _oidc: OidcLogin | None = None
+_step_up: StepUpService | None = None
 
 
 def reset() -> None:
     """Drop every cached adapter; tests use it after changing a setting."""
     global _clock, _ids, _store, _tokens, _users, _sessions, _audit_log  # noqa: PLW0603
-    global _local_login, _mfa, _enrollment, _webauthn, _oidc  # noqa: PLW0603
+    global _local_login, _mfa, _enrollment, _webauthn, _oidc, _step_up  # noqa: PLW0603
     with _lock:
         _clock = _ids = _store = _tokens = _users = _sessions = _audit_log = None
-        _local_login = _mfa = _enrollment = _webauthn = _oidc = None
+        _local_login = _mfa = _enrollment = _webauthn = _oidc = _step_up = None
 
 
 def use_clock(clock: Clock) -> None:
@@ -87,6 +91,9 @@ def use_clock(clock: Clock) -> None:
     """
     global _clock  # noqa: PLW0603
     reset()
+    # The permission class judges a step-up before any use case runs, so the kernel's clock
+    # has to move with this one or that boundary could not be tested at all.
+    kernel_clock.use_clock(clock)
     with _lock:
         _clock = clock
 
@@ -260,6 +267,22 @@ def oidc() -> OidcLogin:
                     redirect_uri=str(settings.HUB_OIDC_REDIRECT_URI),
                 )
     return _oidc
+
+
+def step_up() -> StepUpService:
+    """The second-factor re-check, sharing the WebAuthn verifier with login."""
+    global _step_up  # noqa: PLW0603
+    if _step_up is None:
+        with _lock:
+            if _step_up is None:
+                _step_up = StepUpService(
+                    clock=clock(),
+                    store=store(),
+                    users=users(),
+                    audit=audit_log(),
+                    webauthn=webauthn(),
+                )
+    return _step_up
 
 
 def audit_log() -> AuditLog:

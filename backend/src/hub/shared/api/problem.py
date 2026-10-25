@@ -60,6 +60,8 @@ class MethodNotAllowed(DomainError):
 # 429 and 503 carry Retry-After (slice 00 contract); this is the fallback when the error
 # itself carries no hint.
 DEFAULT_RETRY_AFTER_SECONDS = 30
+# docs/05 section 4: an operation with `x-step-up` demands an authentication at most this old.
+DEFAULT_STEP_UP_MAX_AGE_SECONDS = 300
 
 # detail text per message_key and language. Modules add their keys here (or fall back to
 # the generic sentence) — the ``code`` is what clients branch on.
@@ -243,10 +245,25 @@ def to_problem(
     }
     if errors is not None:
         body["errors"] = errors
+    step_up = exc.details.get("step_up") if isinstance(exc, DomainError) else None
+    if isinstance(step_up, dict):
+        # docs/05: a step-up refusal says how old the authentication may be, so the client can
+        # explain the dialog it opens rather than guessing at the window.
+        body["step_up"] = step_up
     if status == 500 and not isinstance(exc, DomainError):
         # Unexpected failures are logged with the request id; the client gets none of it.
         logger.error("unhandled_exception", extra={"request_id": request_id}, exc_info=exc)
     return status, body
+
+
+def auth_challenge(body: Mapping[str, Any]) -> str | None:
+    """The RFC 6750 challenge a step-up refusal must carry, or None for other problems."""
+    if body.get("status") != 401 or body.get("code") != "step_up_required":
+        return None
+    step_up = body.get("step_up")
+    max_age = step_up.get("max_age") if isinstance(step_up, dict) else None
+    seconds = max_age if isinstance(max_age, int) else DEFAULT_STEP_UP_MAX_AGE_SECONDS
+    return f'Bearer error="insufficient_user_authentication", max_age={seconds}'
 
 
 def problem_response(
@@ -263,6 +280,9 @@ def problem_response(
     )
     if retry_after_seconds is not None:
         response["Retry-After"] = str(retry_after_seconds)
+    challenge = auth_challenge(body)
+    if challenge is not None:
+        response["WWW-Authenticate"] = challenge
     return response
 
 
@@ -270,18 +290,32 @@ def exception_handler(exc: Exception, context: Mapping[str, Any]) -> Response | 
     """DRF EXCEPTION_HANDLER: every failure leaves as problem+json (docs/03 7.7 item 6)."""
     request = context.get("request")
     instance = request.path if request is not None else ""
-    accept = request.headers.get("Accept-Language") if request is not None else None
+    # A signed-in caller's stored language wins over the header: the UI is rendering for that
+    # person, not for whatever the browser happened to send (docs/05 5, FR-16).
+    principal = getattr(request, "principal", None) if request is not None else None
+    stored_locale = getattr(principal, "locale", None)
+    accept = (
+        str(stored_locale)
+        if isinstance(stored_locale, str) and stored_locale
+        else (request.headers.get("Accept-Language") if request is not None else None)
+    )
     status, body = to_problem(
         exc,
         instance=instance,
         request_id=request_id_var.get() or "",
         accept_language=accept,
     )
+    headers: dict[str, str] = {}
     seconds = retry_after(exc)
+    if seconds is not None:
+        headers["Retry-After"] = str(seconds)
+    challenge = auth_challenge(body) or ('Bearer realm="hub-api"' if status == 401 else None)
+    if challenge is not None:
+        headers["WWW-Authenticate"] = challenge
     return Response(
         body,
         status=status,
-        headers={"Retry-After": str(seconds)} if seconds is not None else None,
+        headers=headers or None,
         content_type="application/problem+json",
     )
 

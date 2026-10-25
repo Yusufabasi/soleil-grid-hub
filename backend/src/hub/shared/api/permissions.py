@@ -30,6 +30,10 @@ from rest_framework.exceptions import NotAuthenticated, PermissionDenied
 from rest_framework.permissions import BasePermission
 from rest_framework.request import Request
 
+from hub.shared.api.problem import DEFAULT_STEP_UP_MAX_AGE_SECONDS
+from hub.shared.clock import current
+from hub.shared.errors import Unauthenticated
+
 __all__ = [
     "OperationRule",
     "PermissionsYamlPermission",
@@ -189,6 +193,19 @@ class PermissionsYamlPermission(BasePermission):
         if principal is None:
             raise NotAuthenticated()
 
-        if roles_of(principal) & rule.roles:
-            return True
-        raise PermissionDenied("forbidden")
+        if not (roles_of(principal) & rule.roles):
+            raise PermissionDenied("forbidden")
+
+        if not step_up_is_fresh(principal, rule, now=current()):
+            # 401, not 403: the caller is allowed to do this, but not with an authentication
+            # this old. The challenge tells the client how to ask again (RFC 6750, D-16).
+            raise Unauthenticated(
+                code=rule.step_up_problem_code,
+                message_key="step_up_required",
+                details={
+                    "step_up": {
+                        "max_age": rule.step_up_max_age_seconds or DEFAULT_STEP_UP_MAX_AGE_SECONDS
+                    }
+                },
+            )
+        return True

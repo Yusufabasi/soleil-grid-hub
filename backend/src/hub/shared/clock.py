@@ -1,10 +1,18 @@
-"""Clock adapters. The only place in the codebase allowed to read wall-clock time."""
+"""Clock adapters. The only place in the codebase allowed to read wall-clock time.
+
+``current`` and ``use_clock`` are the kernel's process-wide seam. A use case gets its clock
+injected, but the permission class judges a step-up before any use case runs, and a test that
+proves the five-minute boundary cannot do it against the wall clock. ``use_clock`` is a test
+seam only: production never calls it, and ``SystemClock`` stays the default.
+"""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-__all__ = ["FrozenClock", "SystemClock"]
+from hub.shared.ports import Clock
+
+__all__ = ["FrozenClock", "SystemClock", "current", "use_clock"]
 
 
 class SystemClock:
@@ -12,6 +20,20 @@ class SystemClock:
 
     def now(self) -> datetime:
         return datetime.now(UTC)  # noqa: TID251 - this adapter owns wall-clock time
+
+
+_process_clock: Clock | None = None
+
+
+def current() -> datetime:
+    """The kernel's now: the injected clock in a test, the system clock otherwise."""
+    return (_process_clock or SystemClock()).now()
+
+
+def use_clock(clock: Clock | None) -> None:
+    """Install (or, with ``None``, remove) the process clock. A test seam."""
+    global _process_clock  # noqa: PLW0603
+    _process_clock = clock
 
 
 class FrozenClock:

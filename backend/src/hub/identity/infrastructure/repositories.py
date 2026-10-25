@@ -333,6 +333,27 @@ class UserRepository:
                 "UPDATE hub.users SET password_hash = %s WHERE id = %s", [password_hash, user_id]
             )
 
+    def update_profile(
+        self, user_id: UUID, *, display_name: str | None, locale: str | None
+    ) -> None:
+        """Change the two fields a user owns; anything else is an administrator's decision."""
+        if display_name is not None and locale is not None:
+            sql = (
+                "UPDATE hub.users SET display_name = %s, preferred_language = %s, "
+                "updated_at = now() WHERE id = %s"
+            )
+            params: list[Any] = [display_name, locale, user_id]
+        elif display_name is not None:
+            sql = "UPDATE hub.users SET display_name = %s, updated_at = now() WHERE id = %s"
+            params = [display_name, user_id]
+        elif locale is not None:
+            sql = "UPDATE hub.users SET preferred_language = %s, updated_at = now() WHERE id = %s"
+            params = [locale, user_id]
+        else:
+            return
+        with connection.cursor() as cursor:
+            cursor.execute(sql, params)
+
     def mark_login(self, user_id: UUID, instant: datetime) -> None:
         with connection.cursor() as cursor:
             cursor.execute(

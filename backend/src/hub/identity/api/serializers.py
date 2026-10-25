@@ -63,15 +63,27 @@ class MfaEnrollConfirmInput(serializers.Serializer[dict[str, Any]]):
 
 
 class StepUpInput(serializers.Serializer[dict[str, Any]]):
+    """``StepUpRequest``: a method, and the proof that method needs.
+
+    ``method`` is not required by this validator even though the contract says it is: a client
+    that sends only a code is unambiguous, and refusing it would fail a caller for a field the
+    server can infer. When both are present the method decides.
+    """
+
+    method = serializers.ChoiceField(choices=("totp", "webauthn"), required=False)
     totp_code = serializers.RegexField(r"^[0-9]{6}$", required=False)
     recovery_code = serializers.CharField(max_length=64, required=False)
-    webauthn_assertion = serializers.JSONField(required=False)
+    assertion = serializers.JSONField(required=False)
 
     def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
-        if not any(attrs.get(key) for key in ("totp_code", "recovery_code", "webauthn_assertion")):
+        method = attrs.get("method") or ("webauthn" if attrs.get("assertion") else "totp")
+        if method == "webauthn" and not attrs.get("assertion"):
+            raise serializers.ValidationError({"assertion": ["Provide the WebAuthn assertion."]})
+        if method == "totp" and not (attrs.get("totp_code") or attrs.get("recovery_code")):
             raise serializers.ValidationError(
-                {"totp_code": ["Provide a TOTP code, a recovery code or a WebAuthn assertion."]}
+                {"totp_code": ["Provide a TOTP code or a recovery code."]}
             )
+        attrs["method"] = method
         return attrs
 
 
@@ -95,7 +107,9 @@ class OtpVerifyInput(serializers.Serializer[dict[str, Any]]):
 
 
 class WebAuthnAssertionOptionsInput(serializers.Serializer[dict[str, Any]]):
-    mfa_token = serializers.CharField(max_length=128)
+    """Options for a login assertion (with ``mfa_token``) or a step-up (signed in, without)."""
+
+    mfa_token = serializers.CharField(max_length=128, required=False, allow_blank=False)
 
 
 class WebAuthnRegistrationInput(serializers.Serializer[dict[str, Any]]):

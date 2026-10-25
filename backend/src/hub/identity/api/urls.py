@@ -13,11 +13,13 @@ from hub.identity.api.cookie_views import logout_view, refresh_view
 from hub.identity.api.oidc_views import oidc_callback_view, oidc_start_view
 from hub.identity.api.views import (
     ConfirmMfaEnrollmentView,
+    MeView,
     RegenerateRecoveryCodesView,
     RegisterWebauthnCredentialView,
     StaffLoginView,
     StaffMfaVerifyView,
     StartMfaEnrollmentView,
+    StepUpView,
     VerifyWebauthnAssertionView,
     WebauthnAssertionOptionsView,
     WebauthnRegistrationOptionsView,
@@ -63,6 +65,8 @@ urlpatterns: list[Any] = [
         VerifyWebauthnAssertionView.as_view(),
         name="verifyWebauthnAssertion",
     ),
+    path("auth/step-up", StepUpView.as_view(), name="stepUp"),
+    path("me", MeView.as_view(), name="getMe"),
     path("auth/refresh", refresh_view, name="refreshToken"),
     path("auth/logout", logout_view, name="logout"),
 ]

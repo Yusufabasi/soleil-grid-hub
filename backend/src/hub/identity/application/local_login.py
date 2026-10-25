@@ -27,6 +27,7 @@ from uuid import UUID
 
 import pyotp
 
+from hub.identity.application.totp import TOTP_VALID_WINDOW, verify_totp_code
 from hub.identity.contracts import AuditLog
 from hub.shared.contracts import KeyValueStore
 from hub.shared.errors import PermissionDenied, RateLimited, Unauthenticated
@@ -53,9 +54,6 @@ CHALLENGE_TTL_SECONDS = 300
 ENROLLMENT_TTL_SECONDS = 300
 RECOVERY_CODE_COUNT = 10
 TOTP_STEP_SECONDS = 30
-# docs/05: one step either side of now is accepted, two is not.
-TOTP_VALID_WINDOW = 1
-TOTP_REPLAY_TTL_SECONDS = 90
 FAILURE_LIMIT = 5
 FAILURE_WINDOW_SECONDS = 900
 # Roles that must present a security key once HUB_WEBAUTHN_ENFORCED is on (docs/05 4).
@@ -305,35 +303,16 @@ class MfaService:
     def _verify_totp(self, record: Any, code: str, *, ip: str | None) -> None:
         if record.mfa_secret_enc is None:
             raise Unauthenticated(code="invalid_code")
-        secret = self._users.totp_secret(record.id)
-        now = self._clock.now()
-        totp = pyotp.TOTP(secret)
-        # `verify` with a window returns the counter that matched only via the timestamp we
-        # pass, so each candidate step is tried explicitly and its counter remembered.
-        for offset in range(-TOTP_VALID_WINDOW, TOTP_VALID_WINDOW + 1):
-            instant = now + timedelta(seconds=offset * TOTP_STEP_SECONDS)
-            if not pyotp.utils.strings_equal(str(totp.at(instant)), code):
-                continue
-            counter = _counter_of(totp, instant)
-            if not self._store.add_once(
-                f"totp:used:{record.id}:{counter}",
-                "1",
-                ttl_seconds=TOTP_REPLAY_TTL_SECONDS,
-            ):
-                self._audit.record(
-                    stream="auth",
-                    actor=None,
-                    action="auth.mfa.replay",
-                    entity_type="user",
-                    entity_id=record.id,
-                    site_id=None,
-                    details={"method": "totp"},
-                    outcome="denied",
-                    ip=ip,
-                )
-                raise Unauthenticated(code="invalid_code")
-            return
-        raise Unauthenticated(code="invalid_code")
+        # The window and the replay guard live in one place, shared with step-up.
+        verify_totp_code(
+            clock=self._clock,
+            store=self._store,
+            users=self._users,
+            audit=self._audit,
+            user_id=record.id,
+            code=code,
+            ip=ip,
+        )
 
     def _verify_recovery(self, record: Any, code: str, *, ip: str | None) -> None:
         consumed = self._users.consume_recovery_code(
@@ -428,7 +407,3 @@ def _challenge_key(mfa_token: str) -> str:
 
 def _enrollment_key(mfa_token: str) -> str:
     return f"mfa_enrollment:{digest_token(mfa_token).hex()}"
-
-
-def _counter_of(totp: pyotp.TOTP, instant: datetime) -> int:
-    return int(instant.timestamp()) // int(totp.interval or TOTP_STEP_SECONDS)

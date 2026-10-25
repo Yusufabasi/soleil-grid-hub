@@ -33,8 +33,8 @@ of the slice.
 | 01.4 | Refresh sessions, cookie views and CSRF guard | done | see below | `cd backend && python -m pytest tests/integration/identity/test_refresh.py tests/integration/identity/test_csrf.py -q` -> `22 passed` (exact cookie attributes and no refresh token in JSON, rotation, replay one second later revokes the family, idle boundary at 1799/1800+ and absolute at the eighth hour, body transport only with the header, logout revokes and clears, refreshed principal keeps the login `auth_time`, a grant appears in the refreshed principal; four CSRF failures x two endpoints, a cookie alone does not authenticate a bearer operation); `pytest -q` -> `193 passed`; `make lint` -> exit 0 |
 | 01.5 | Local break-glass login, TOTP, recovery codes | done | see below | `cd backend && python -m pytest tests/integration/identity/test_local_login.py -q` -> `11 passed` (wrong password and unknown address identical in status, code, detail and time; fifth failure closes the window with `Retry-After`, right password included; login never returns a token; verify returns a token pair and a cookie; TOTP replay refused; one step of drift accepted, two refused; recovery code single use and case/space insensitive; regeneration returns ten and deletes the old set; enrolment stores an encrypted secret and ten codes and signs in); `pytest -q` -> `204 passed`; `make lint` -> exit 0 |
 | 01.6 | WebAuthn registration, assertion, enforcement | done | `abe7685` | `cd backend && python -m pytest tests/integration/identity/test_webauthn.py -q` -> `7 passed` (a real P-256 key registers and the next login asserts into a token pair; a challenge is single use; an assertion without the user-verification bit is refused; a rewound `sign_count` is refused; registration needs a bearer; with `HUB_WEBAUTHN_ENFORCED` a finance officer's TOTP is 403 `webauthn_required` and the challenge offers `["webauthn"]` with `enrollment_required: true` while a support agent still signs in with TOTP); `pytest -q` -> `211 passed`; `make lint` -> exit 0 (ruff, format, mypy strict 168 files, import-linter, Django config checks) |
-| 01.7 | OIDC code exchange in hub-api | done | see below | `cd backend && python -m pytest tests/integration/identity/test_oidc.py -q` -> `6 passed` (the start redirect carries `S256` PKCE, state, nonce and a `HttpOnly; Secure; SameSite=Lax` cookie scoped to `/api/v1/auth/oidc` for 600 s; a wrong state is 400 `invalid_request` and spends the flow so the right one cannot follow; an ID token without `mfa` in `amr` is 401 `mfa_required`; an unknown subject is 403 `account_not_provisioned` and creates no user; a known one gets a 302 to the stored `return_to` and a real rotating refresh session with `acr=mfa`; the client secret appears in neither the redirect nor the response); `pytest -q` -> `217 passed`; `make lint` -> exit 0 (ruff, format, mypy strict 170 files, import-linter 119 kept, Django config checks) |
-| 01.8 | Step-up, `/me`, locale in the principal | not started | — | — |
+| 01.7 | OIDC code exchange in hub-api | done | `3b2811a` | `cd backend && python -m pytest tests/integration/identity/test_oidc.py -q` -> `6 passed` (the start redirect carries `S256` PKCE, state, nonce and a `HttpOnly; Secure; SameSite=Lax` cookie scoped to `/api/v1/auth/oidc` for 600 s; a wrong state is 400 `invalid_request` and spends the flow so the right one cannot follow; an ID token without `mfa` in `amr` is 401 `mfa_required`; an unknown subject is 403 `account_not_provisioned` and creates no user; a known one gets a 302 to the stored `return_to` and a real rotating refresh session with `acr=mfa`; the client secret appears in neither the redirect nor the response); `pytest -q` -> `217 passed`; `make lint` -> exit 0 (ruff, format, mypy strict 170 files, import-linter 119 kept, Django config checks) |
+| 01.8 | Step-up, `/me`, locale in the principal | done | see below | `cd backend && python -m pytest tests/integration/identity/test_step_up.py tests/integration/identity/test_me.py -q` -> `39 passed` (299 s accepted and 301 s refused with 401 `step_up_required`, `step_up.max_age: 300` and `WWW-Authenticate: Bearer error="insufficient_user_authentication", max_age=300`; a TOTP step-up returns a token whose principal carries the fresh `auth_time`, leaves the cookie alone and then passes the guarded operation; the same code cannot be replayed; a token minted by a step-up dies with its session when the token version is bumped; every guarded rule refuses a stale principal and accepts a fresh one; `/me` returns roles, attributes, a real site id, locale, `mfa_enrolled`, `acr` and `auth_time`; `PATCH /me` stores `fr` and stores `de` as `en`; a 422 detail follows the caller's stored language with no `Accept-Language` header; `/me` without a token is a 401 with a bearer challenge); `pytest -q` -> `256 passed`; `make lint` -> exit 0 (ruff, format, mypy strict 172 files, import-linter 119 kept, Django config checks) |
 | 01.9 | ApprovalService, executor registry, conflict check | not started | — | — |
 | 01.10-01.12 | (see slice file: customer OTP, user admin, wiring) | not started | — | — |
 
@@ -187,6 +187,30 @@ of the slice.
   URLConf by default and the tests call the views through `RequestFactory` instead. Metadata
   and JWKS are cached for the process and refetched once when a signature fails, which covers
   a provider key rotation without a restart.
+- **01.8 the step-up boundary is judged on the kernel's clock**: the permission class runs
+  before any use case, so it cannot receive the identity module's clock. `hub.shared.clock`
+  gained `current()` and a `use_clock()` test seam, and `wiring.use_clock()` moves both, which
+  is what makes the 299/301-second boundary provable instead of a sleeping test.
+- **01.8 a step-up refusal is a 401 with a challenge, not a 403**: the caller is allowed to act
+  and only the authentication is too old, so `PermissionsYamlPermission` raises
+  `Unauthenticated(code="step_up_required", details={"step_up": {"max_age": n}})`; both
+  problem renderers add `WWW-Authenticate: Bearer error="insufficient_user_authentication"`
+  and every other 401 gets the plain `Bearer realm="hub-api"` challenge it used to inherit
+  from DRF. docs/05's `step_up.methods` is not emitted: the enrolled factors are already known
+  from `/me/security`, and inventing the list in the kernel would contradict the account.
+- **01.8 a step-up keeps its session and rotates nothing**: the response is a fresh access
+  token and no `Set-Cookie`. The session's remembered `auth_time` and `acr` are updated with
+  `SessionService.remember_authentication`, so a later refresh carries the step-up instead of
+  silently falling back to the login instant.
+- **01.8 WebAuthn step-up reuses `webauthnAssertionOptions` without an `mfa_token`**: the
+  operation's request body makes `mfa_token` optional, and a caller who is already signed in
+  gets options bound to a `step_up` challenge instead of a login one. The alternative was a
+  new operation, and the contract files are frozen; `POST /auth/step-up` then takes
+  `{method: webauthn, assertion: {challenge_id, credential}}`. The response schema of both
+  operations is unchanged.
+- **01.8 the TOTP window and replay guard moved into `application/totp.py`**: login and step-up
+  must not disagree about which digits are acceptable or be able to spend the same counter
+  twice, so one function answers both and the audit row for a replay is written there.
 - **01.1 tests beyond the plan's three**: the plan names the completeness test, the
   role-denial test and the undeclared-view test. Two more pin the other two outcomes of the
   same class (the listed role is allowed, no principal is 401), so the 401/403/200 triangle is
