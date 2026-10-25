@@ -6,9 +6,11 @@ the two cookie endpoints of D-17, the break-glass login chain, and `/me` from Ta
 
 from typing import Any
 
+from django.conf import settings
 from django.urls import path
 
 from hub.identity.api.cookie_views import logout_view, refresh_view
+from hub.identity.api.oidc_views import oidc_callback_view, oidc_start_view
 from hub.identity.api.views import (
     ConfirmMfaEnrollmentView,
     RegenerateRecoveryCodesView,
@@ -64,3 +66,11 @@ urlpatterns: list[Any] = [
     path("auth/refresh", refresh_view, name="refreshToken"),
     path("auth/logout", logout_view, name="logout"),
 ]
+
+# The identity provider is not configured in every environment (Plan notes 1): the code ships,
+# the routes do not, until an issuer and a client exist for it.
+if settings.HUB_OIDC_ROUTES_ENABLED:
+    urlpatterns += [
+        path("auth/oidc/start", oidc_start_view, name="oidcStart"),
+        path("auth/oidc/callback", oidc_callback_view, name="oidcCallback"),
+    ]

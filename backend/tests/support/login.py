@@ -42,6 +42,7 @@ def seed_local_user(
     status: str = "active",
     attributes: tuple[str, ...] = (),
     site_ids: tuple[UUID, ...] = (),
+    idp_subject: str | None = None,
 ) -> LocalUser:
     user_id = uuid.uuid4()
     email = f"{user_id}@example.test"
@@ -51,6 +52,7 @@ def seed_local_user(
         email=email,
         display_name=f"Test {roles[0] if roles else 'user'}",
         password_hash=hash_password(password),
+        idp_subject=idp_subject,
         mfa_secret_enc=encrypt_secret(secret) if mfa else None,
         mfa_enrolled_at=datetime.now(UTC) if mfa else None,
         status=status,

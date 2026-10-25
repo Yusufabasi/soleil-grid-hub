@@ -23,6 +23,7 @@ from hub.identity.application.local_login import (
     LoginThrottle,
     MfaService,
 )
+from hub.identity.application.oidc import OidcLogin
 from hub.identity.application.sessions import SessionLimits, SessionService
 from hub.identity.application.tokens import AccessTokenService
 from hub.identity.application.webauthn import WebauthnService
@@ -43,6 +44,7 @@ __all__ = [
     "enrollment",
     "local_login",
     "mfa",
+    "oidc",
     "reset",
     "sessions",
     "store",
@@ -64,15 +66,16 @@ _local_login: LocalLogin | None = None
 _mfa: MfaService | None = None
 _enrollment: EnrollmentService | None = None
 _webauthn: WebauthnService | None = None
+_oidc: OidcLogin | None = None
 
 
 def reset() -> None:
     """Drop every cached adapter; tests use it after changing a setting."""
     global _clock, _ids, _store, _tokens, _users, _sessions, _audit_log  # noqa: PLW0603
-    global _local_login, _mfa, _enrollment, _webauthn  # noqa: PLW0603
+    global _local_login, _mfa, _enrollment, _webauthn, _oidc  # noqa: PLW0603
     with _lock:
         _clock = _ids = _store = _tokens = _users = _sessions = _audit_log = None
-        _local_login = _mfa = _enrollment = _webauthn = None
+        _local_login = _mfa = _enrollment = _webauthn = _oidc = None
 
 
 def use_clock(clock: Clock) -> None:
@@ -237,6 +240,26 @@ def webauthn() -> WebauthnService:
                     origin=origin,
                 )
     return _webauthn
+
+
+def oidc() -> OidcLogin:
+    """The company identity provider client, configured from settings (D-47)."""
+    global _oidc  # noqa: PLW0603
+    if _oidc is None:
+        with _lock:
+            if _oidc is None:
+                _oidc = OidcLogin(
+                    clock=clock(),
+                    store=store(),
+                    users=users(),
+                    sessions=sessions(),
+                    audit=audit_log(),
+                    issuer=str(settings.HUB_OIDC_ISSUER),
+                    client_id=str(settings.HUB_OIDC_CLIENT_ID),
+                    client_secret=str(settings.HUB_OIDC_CLIENT_SECRET),
+                    redirect_uri=str(settings.HUB_OIDC_REDIRECT_URI),
+                )
+    return _oidc
 
 
 def audit_log() -> AuditLog:

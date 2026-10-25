@@ -32,8 +32,8 @@ of the slice.
 | 01.3 | EdDSA access tokens and bearer authentication | done | see below | `cd backend && python -m pytest tests/unit/identity/test_tokens.py tests/integration/identity/test_bearer.py -q` -> `18 passed` (600 s lifetime and claim set, no roles claim, `alg: none` refused, HS256 key confusion refused, leeway boundary on a frozen clock, edited payload refused, foreign issuer and over-long lifetime refused; live token authenticates, missing/garbage/non-bearer 401, stale `tv` 401 `token_revoked` with a warm and a cold cache, suspended and soft-deleted users refused, authority read from the database after a grant); `pytest -q` -> `171 passed`; `make lint` -> exit 0 (ruff, format, mypy strict 183 files, import-linter 119 kept, Django config checks) |
 | 01.4 | Refresh sessions, cookie views and CSRF guard | done | see below | `cd backend && python -m pytest tests/integration/identity/test_refresh.py tests/integration/identity/test_csrf.py -q` -> `22 passed` (exact cookie attributes and no refresh token in JSON, rotation, replay one second later revokes the family, idle boundary at 1799/1800+ and absolute at the eighth hour, body transport only with the header, logout revokes and clears, refreshed principal keeps the login `auth_time`, a grant appears in the refreshed principal; four CSRF failures x two endpoints, a cookie alone does not authenticate a bearer operation); `pytest -q` -> `193 passed`; `make lint` -> exit 0 |
 | 01.5 | Local break-glass login, TOTP, recovery codes | done | see below | `cd backend && python -m pytest tests/integration/identity/test_local_login.py -q` -> `11 passed` (wrong password and unknown address identical in status, code, detail and time; fifth failure closes the window with `Retry-After`, right password included; login never returns a token; verify returns a token pair and a cookie; TOTP replay refused; one step of drift accepted, two refused; recovery code single use and case/space insensitive; regeneration returns ten and deletes the old set; enrolment stores an encrypted secret and ten codes and signs in); `pytest -q` -> `204 passed`; `make lint` -> exit 0 |
-| 01.6 | WebAuthn registration, assertion, enforcement | done | see below | `cd backend && python -m pytest tests/integration/identity/test_webauthn.py -q` -> `7 passed` (a real P-256 key registers and the next login asserts into a token pair; a challenge is single use; an assertion without the user-verification bit is refused; a rewound `sign_count` is refused; registration needs a bearer; with `HUB_WEBAUTHN_ENFORCED` a finance officer's TOTP is 403 `webauthn_required` and the challenge offers `["webauthn"]` with `enrollment_required: true` while a support agent still signs in with TOTP); `pytest -q` -> `211 passed`; `make lint` -> exit 0 (ruff, format, mypy strict 168 files, import-linter, Django config checks) |
-| 01.7 | OIDC code exchange in hub-api | not started | — | — |
+| 01.6 | WebAuthn registration, assertion, enforcement | done | `abe7685` | `cd backend && python -m pytest tests/integration/identity/test_webauthn.py -q` -> `7 passed` (a real P-256 key registers and the next login asserts into a token pair; a challenge is single use; an assertion without the user-verification bit is refused; a rewound `sign_count` is refused; registration needs a bearer; with `HUB_WEBAUTHN_ENFORCED` a finance officer's TOTP is 403 `webauthn_required` and the challenge offers `["webauthn"]` with `enrollment_required: true` while a support agent still signs in with TOTP); `pytest -q` -> `211 passed`; `make lint` -> exit 0 (ruff, format, mypy strict 168 files, import-linter, Django config checks) |
+| 01.7 | OIDC code exchange in hub-api | done | see below | `cd backend && python -m pytest tests/integration/identity/test_oidc.py -q` -> `6 passed` (the start redirect carries `S256` PKCE, state, nonce and a `HttpOnly; Secure; SameSite=Lax` cookie scoped to `/api/v1/auth/oidc` for 600 s; a wrong state is 400 `invalid_request` and spends the flow so the right one cannot follow; an ID token without `mfa` in `amr` is 401 `mfa_required`; an unknown subject is 403 `account_not_provisioned` and creates no user; a known one gets a 302 to the stored `return_to` and a real rotating refresh session with `acr=mfa`; the client secret appears in neither the redirect nor the response); `pytest -q` -> `217 passed`; `make lint` -> exit 0 (ruff, format, mypy strict 170 files, import-linter 119 kept, Django config checks) |
 | 01.8 | Step-up, `/me`, locale in the principal | not started | — | — |
 | 01.9 | ApprovalService, executor registry, conflict check | not started | — | — |
 | 01.10-01.12 | (see slice file: customer OTP, user admin, wiring) | not started | — | — |
@@ -168,6 +168,25 @@ of the slice.
   `challenge_id` and the bytes stay server-side for 300 seconds, so a replayed or forged
   challenge has nothing to match. `_consume` pops before checking and binds purpose and user
   id, which makes a challenge from another flow useless.
+- **01.7 Authlib drives the flow, PyJWT verifies the ID token**: `OAuth2Session` builds the
+  authorization URL (PKCE `S256` included) and performs the code exchange with the client
+  secret in the `Authorization` header. `authlib.jose` is deprecated in authlib 1.9 in favour
+  of `joserfc`, which the project does not declare, so the token itself is verified with the
+  PyJWT that already signs access tokens: key by `kid` from the JWKS, then `iss`, `aud`, `exp`
+  and the `nonce` compare.
+- **01.7 `return_to` travels in Redis, not through the provider**: the callback only receives
+  `code` and `state`, so the redirect target is stored beside the verifier and nonce when the
+  flow starts. Only a same-site absolute path is accepted there (`//host` and absolute URLs
+  fall back to `/`), which removes the one place an open redirect could start.
+- **01.7 the provider identity is never provisioned on the fly**: an unknown `sub` is a 403
+  `account_not_provisioned` and an audit row with `outcome=denied`; the administrator creates
+  the user and records its subject first (docs/05). A provider outage is 503
+  `provider_unavailable`, distinct from a token the provider refused, which is 401.
+- **01.7 the routes are mounted only when `HUB_OIDC_ROUTES_ENABLED`**: no environment has an
+  issuer yet (Plan notes 1), so `auth/oidc/start` and `auth/oidc/callback` are absent from the
+  URLConf by default and the tests call the views through `RequestFactory` instead. Metadata
+  and JWKS are cached for the process and refetched once when a signature fails, which covers
+  a provider key rotation without a restart.
 - **01.1 tests beyond the plan's three**: the plan names the completeness test, the
   role-denial test and the undeclared-view test. Two more pin the other two outcomes of the
   same class (the listed role is allowed, no principal is 401), so the 401/403/200 triangle is
