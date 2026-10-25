@@ -16,6 +16,12 @@ import threading
 
 from django.conf import settings
 
+from hub.identity.application.local_login import (
+    EnrollmentService,
+    LocalLogin,
+    LoginThrottle,
+    MfaService,
+)
 from hub.identity.application.sessions import SessionLimits, SessionService
 from hub.identity.application.tokens import AccessTokenService
 from hub.identity.contracts import AuditLog, Principal
@@ -24,6 +30,7 @@ from hub.identity.infrastructure.repositories import SessionRepository, UserRepo
 from hub.shared.clock import SystemClock
 from hub.shared.contracts import KeyValueStore
 from hub.shared.ids import Uuid7Generator
+from hub.shared.ports import Clock
 from hub.shared.redis import get_store
 from hub.shared.uow import DjangoUnitOfWork, PrincipalContext, UnitOfWork
 
@@ -31,6 +38,9 @@ __all__ = [
     "audit_log",
     "clock",
     "ids",
+    "enrollment",
+    "local_login",
+    "mfa",
     "reset",
     "sessions",
     "store",
@@ -40,23 +50,41 @@ __all__ = [
 ]
 
 _lock = threading.RLock()
-_clock: SystemClock | None = None
+_clock: Clock | None = None
 _ids: Uuid7Generator | None = None
 _store: KeyValueStore | None = None
 _tokens: AccessTokenService | None = None
 _users: UserRepository | None = None
 _sessions: SessionService | None = None
 _audit_log: AuditLog | None = None
+_local_login: LocalLogin | None = None
+_mfa: MfaService | None = None
+_enrollment: EnrollmentService | None = None
 
 
 def reset() -> None:
     """Drop every cached adapter; tests use it after changing a setting."""
     global _clock, _ids, _store, _tokens, _users, _sessions, _audit_log  # noqa: PLW0603
+    global _local_login, _mfa, _enrollment  # noqa: PLW0603
     with _lock:
         _clock = _ids = _store = _tokens = _users = _sessions = _audit_log = None
+        _local_login = _mfa = _enrollment = None
 
 
-def clock() -> SystemClock:
+def use_clock(clock: Clock) -> None:
+    """Install a clock and drop the adapters that captured the previous one.
+
+    A test seam, and the only reason this module has one: idle and absolute session limits and
+    the step-up boundary are seconds apart, so proving them needs a frozen clock rather than a
+    sleeping test. Production wiring never calls it.
+    """
+    global _clock  # noqa: PLW0603
+    reset()
+    with _lock:
+        _clock = clock
+
+
+def clock() -> Clock:
     """The process clock: UTC, tz-aware (docs/03 2.1)."""
     global _clock  # noqa: PLW0603
     if _clock is None:
@@ -137,6 +165,54 @@ def sessions() -> SessionService:
                     ),
                 )
     return _sessions
+
+
+def _throttle() -> LoginThrottle:
+    return LoginThrottle(store())
+
+
+def local_login() -> LocalLogin:
+    """Step one of the break-glass flow, with the account and address lockout."""
+    global _local_login  # noqa: PLW0603
+    if _local_login is None:
+        with _lock:
+            if _local_login is None:
+                _local_login = LocalLogin(
+                    clock=clock(),
+                    ids=ids(),
+                    store=store(),
+                    users=users(),
+                    audit=audit_log(),
+                    throttle=_throttle(),
+                    webauthn_enforced=bool(settings.HUB_WEBAUTHN_ENFORCED),
+                )
+    return _local_login
+
+
+def mfa() -> MfaService:
+    """Step two: the TOTP or recovery code and the session it opens."""
+    global _mfa  # noqa: PLW0603
+    if _mfa is None:
+        with _lock:
+            if _mfa is None:
+                _mfa = MfaService(
+                    clock=clock(),
+                    store=store(),
+                    users=users(),
+                    sessions=sessions(),
+                    audit=audit_log(),
+                )
+    return _mfa
+
+
+def enrollment() -> EnrollmentService:
+    """TOTP enrolment and recovery-code rotation."""
+    global _enrollment  # noqa: PLW0603
+    if _enrollment is None:
+        with _lock:
+            if _enrollment is None:
+                _enrollment = EnrollmentService(clock=clock(), store=store(), users=users())
+    return _enrollment
 
 
 def audit_log() -> AuditLog:

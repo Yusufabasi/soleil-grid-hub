@@ -31,7 +31,7 @@ of the slice.
 | 01.2 | Audit adapter and audit view | done | `1326c43` (prerequisite fix `50e8ac9`, refactor `d9b9275`) | `cd backend && python -m pytest tests/integration/identity/test_audit.py tests/integration/admin/test_audit_view.py -q` -> `14 passed` (chained seq and prev_hash, actor and address stored without personal details, deny-list refused, outcome lifted out of details, `hub_api` cannot UPDATE or DELETE, a tampered row reported at its exact seq, an anchor that no longer matches the head reported, administrator page plus its own `audit.read`, support agent 403 writing nothing, cursor paging, tampered cursor 400, missing stream 400, action prefix); `pytest -q` -> `153 passed, 0 skipped`; root `pytest tests -q` -> `42 passed, 5 deselected`; `make lint` -> exit 0 (ruff, format, mypy strict 176 files, import-linter 119 kept, Django config checks); `check_traceability.py` -> 0 errors; `openapi.yaml` valid |
 | 01.3 | EdDSA access tokens and bearer authentication | done | see below | `cd backend && python -m pytest tests/unit/identity/test_tokens.py tests/integration/identity/test_bearer.py -q` -> `18 passed` (600 s lifetime and claim set, no roles claim, `alg: none` refused, HS256 key confusion refused, leeway boundary on a frozen clock, edited payload refused, foreign issuer and over-long lifetime refused; live token authenticates, missing/garbage/non-bearer 401, stale `tv` 401 `token_revoked` with a warm and a cold cache, suspended and soft-deleted users refused, authority read from the database after a grant); `pytest -q` -> `171 passed`; `make lint` -> exit 0 (ruff, format, mypy strict 183 files, import-linter 119 kept, Django config checks) |
 | 01.4 | Refresh sessions, cookie views and CSRF guard | done | see below | `cd backend && python -m pytest tests/integration/identity/test_refresh.py tests/integration/identity/test_csrf.py -q` -> `22 passed` (exact cookie attributes and no refresh token in JSON, rotation, replay one second later revokes the family, idle boundary at 1799/1800+ and absolute at the eighth hour, body transport only with the header, logout revokes and clears, refreshed principal keeps the login `auth_time`, a grant appears in the refreshed principal; four CSRF failures x two endpoints, a cookie alone does not authenticate a bearer operation); `pytest -q` -> `193 passed`; `make lint` -> exit 0 |
-| 01.5 | Local break-glass login, TOTP, recovery codes | not started | — | — |
+| 01.5 | Local break-glass login, TOTP, recovery codes | done | see below | `cd backend && python -m pytest tests/integration/identity/test_local_login.py -q` -> `11 passed` (wrong password and unknown address identical in status, code, detail and time; fifth failure closes the window with `Retry-After`, right password included; login never returns a token; verify returns a token pair and a cookie; TOTP replay refused; one step of drift accepted, two refused; recovery code single use and case/space insensitive; regeneration returns ten and deletes the old set; enrolment stores an encrypted secret and ten codes and signs in); `pytest -q` -> `204 passed`; `make lint` -> exit 0 |
 | 01.6 | WebAuthn registration, assertion, enforcement | not started | — | — |
 | 01.7 | OIDC code exchange in hub-api | not started | — | — |
 | 01.8 | Step-up, `/me`, locale in the principal | not started | — | — |
@@ -140,6 +140,21 @@ of the slice.
 - **01.4 `Principal` gained `display_name` and `mfa_enrolled`**: `api/openapi.yaml` requires
   `display_name` in every `Principal` document, and the account facts belong to the caller's
   DTO rather than to a serializer that would have to fetch them again. They grant nothing.
+- **01.5 TOTP time comes from the clock, not from pyotp**: `pyotp.TOTP.verify` compares
+  against the wall clock, which a frozen test cannot move. Both the login and the enrolment
+  confirm try the three candidate steps around `Clock.now()` explicitly and compare with
+  `pyotp.utils.strings_equal`, so the ±1-step window is the same in production and in a test,
+  and the replay guard keys on the counter of the step that matched.
+- **01.5 the replay guard is a Redis key**: `hub.users` has no "last accepted counter" column
+  (Plan note 3), so `totp:used:{user}:{counter}` with a 90-second TTL is the record. Losing
+  Redis loses replay protection for at most one step, not the factor itself.
+- **01.5 a wrong confirming code burns the pending enrolment secret**: the secret is only in
+  Redis for 300 seconds, and `confirm` pops it before checking the code, so a wrong code means
+  the client starts enrolment again. The alternative — retrying the same pending secret —
+  would let an attacker keep guessing against one secret for the whole window.
+- **01.5 `wiring.use_clock` is a test seam**: idle limits, the absolute limit and the step-up
+  boundary are seconds apart, so proving them needs a frozen clock rather than a sleeping
+  test. It resets the adapters that captured the previous clock and is documented as such.
 - **01.1 tests beyond the plan's three**: the plan names the completeness test, the
   role-denial test and the undeclared-view test. Two more pin the other two outcomes of the
   same class (the listed role is allowed, no principal is 401), so the 401/403/200 triangle is

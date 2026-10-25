@@ -22,8 +22,10 @@ from django.db import connection
 
 from hub.identity.contracts import SessionRow, TokenClaims
 from hub.identity.domain.principal import Locale, Principal
+from hub.identity.infrastructure.crypto import decrypt_secret, encrypt_secret
 from hub.shared.contracts import KeyValueStore
 from hub.shared.errors import Unauthenticated
+from hub.shared.ids import uuid7
 
 __all__ = ["TOKEN_VERSION_TTL_SECONDS", "SessionRepository", "UserRecord", "UserRepository"]
 
@@ -179,6 +181,95 @@ class UserRepository:
             raise Unauthenticated()
         self._store.delete(self._version_key(user_id))
         return int(row[0])
+
+    def has_webauthn_credential(self, user_id: UUID) -> bool:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT 1 FROM hub.webauthn_credentials WHERE user_id = %s LIMIT 1", [user_id]
+            )
+            return cursor.fetchone() is not None
+
+    def count_unused_recovery_codes(self, user_id: UUID) -> int:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT count(*) FROM hub.mfa_recovery_codes WHERE user_id = %s AND used_at IS NULL",
+                [user_id],
+            )
+            row = cursor.fetchone()
+        return int(row[0]) if row is not None else 0
+
+    def insert_recovery_codes(self, user_id: UUID, hashes: list[bytes]) -> None:
+        if not hashes:
+            return
+        with connection.cursor() as cursor:
+            cursor.executemany(
+                "INSERT INTO hub.mfa_recovery_codes (id, user_id, code_hash) VALUES (%s, %s, %s)",
+                [(uuid7(), user_id, digest) for digest in hashes],
+            )
+
+    def replace_recovery_codes(self, user_id: UUID, hashes: list[bytes]) -> None:
+        """Invalidate the previous set and store a new one in one transaction."""
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM hub.mfa_recovery_codes WHERE user_id = %s", [user_id])
+        self.insert_recovery_codes(user_id, hashes)
+
+    def delete_recovery_codes(self, user_id: UUID) -> int:
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM hub.mfa_recovery_codes WHERE user_id = %s", [user_id])
+            return int(cursor.rowcount)
+
+    def consume_recovery_code(self, user_id: UUID, code_hash: bytes, *, at: datetime) -> bool:
+        """Mark one unused code used; False when it was already used or never existed."""
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE hub.mfa_recovery_codes SET used_at = %s "
+                "WHERE user_id = %s AND code_hash = %s AND used_at IS NULL",
+                [at, user_id, code_hash],
+            )
+            return int(cursor.rowcount) == 1
+
+    def store_mfa_enrollment(
+        self,
+        user_id: UUID,
+        *,
+        secret: str,
+        recovery_hashes: list[bytes],
+        at: datetime,
+    ) -> None:
+        """Write the encrypted TOTP secret and the first set of recovery codes together."""
+        encrypted = encrypt_secret(secret)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE hub.users SET mfa_secret_enc = %s, mfa_enrolled_at = %s WHERE id = %s",
+                [encrypted, at, user_id],
+            )
+        self.replace_recovery_codes(user_id, recovery_hashes)
+
+    def totp_secret(self, user_id: UUID) -> str:
+        """The decrypted TOTP secret; a configuration change surfaces as Unauthenticated."""
+        record = self.get(user_id)
+        if record is None or record.mfa_secret_enc is None:
+            raise Unauthenticated(code="invalid_code")
+        try:
+            return decrypt_secret(record.mfa_secret_enc)
+        except ValueError as exc:
+            raise Unauthenticated(code="invalid_code") from exc
+
+    def clear_mfa(self, user_id: UUID) -> None:
+        """Forget the second factor: secret, enrolment time, recovery codes and credentials."""
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE hub.users SET mfa_secret_enc = NULL, mfa_enrolled_at = NULL WHERE id = %s",
+                [user_id],
+            )
+            cursor.execute("DELETE FROM hub.mfa_recovery_codes WHERE user_id = %s", [user_id])
+            cursor.execute("DELETE FROM hub.webauthn_credentials WHERE user_id = %s", [user_id])
+
+    def set_password_hash(self, user_id: UUID, password_hash: str) -> None:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE hub.users SET password_hash = %s WHERE id = %s", [password_hash, user_id]
+            )
 
     def mark_login(self, user_id: UUID, instant: datetime) -> None:
         with connection.cursor() as cursor:
