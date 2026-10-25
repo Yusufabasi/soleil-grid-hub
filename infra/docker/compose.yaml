@@ -33,6 +33,9 @@ x-py-ready: &py-ready
   interval: 5s
   timeout: 3s
   retries: 3
+  # A cold start imports Django in eight containers at once; without this grace a slow first
+  # import counts as a failed check and `up --wait` gives up on a container that is coming up.
+  start_period: 45s
 
 # The worker commands serve no HTTP, so their liveness signal is the metrics port they open.
 x-worker-ready: &worker-ready
@@ -46,6 +49,7 @@ x-worker-ready: &worker-ready
   interval: 10s
   timeout: 3s
   retries: 3
+  start_period: 45s
 
 x-app: &app
   image: soleil/hub:${TAG:-dev}
