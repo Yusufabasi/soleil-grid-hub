@@ -5,10 +5,13 @@ compose, PgBouncer and stub assertions; Task 00.11 adds the CI and verify-script
 """
 
 import configparser
+import json
 import re
+import subprocess
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -313,3 +316,121 @@ def test_env_example_has_no_real_secrets():
     }
 
     assert offending == {}, f".env.example carries non dev values: {offending}"
+
+
+# --- Task 00.11: CI pipeline and verify script ------------------------------------------
+
+CI_WORKFLOW = ROOT / ".github/workflows/ci.yml"
+
+# The gates of docs/09 section 6, one job per kind of evidence.
+CI_JOBS = {"python", "frontend", "sql", "contracts", "security", "images"}
+
+# The commands of the slice's Verification section, in that order.
+VERIFY_COMMANDS = (
+    "make lint",
+    "pytest tests/unit tests/architecture",
+    "pytest tests/integration",
+    "pytest tests -q",
+    "tools/check_traceability.py",
+    "tools/check_django_config.py",
+    "makemigrations --check",
+    "tests/test_stack_up.py",
+    "compose.yaml config -q",
+)
+
+
+def ci_document() -> dict[str, object]:
+    document = yaml.safe_load(CI_WORKFLOW.read_text())
+    assert isinstance(document, dict)
+    return document
+
+
+def ci_jobs() -> dict[str, dict[str, object]]:
+    jobs = ci_document()["jobs"]
+    assert isinstance(jobs, dict)
+    return jobs
+
+
+def job_text(job: dict[str, object]) -> str:
+    """A job's whole definition as text, for the ``contains`` assertions."""
+    return json.dumps(job)
+
+
+@pytest.mark.tc("TC-NFR-14-4")
+@pytest.mark.tc("TC-NFR-14-5")
+def test_ci_workflow_has_required_jobs():
+    document = ci_document()
+    jobs = ci_jobs()
+
+    assert CI_JOBS <= set(jobs), sorted(CI_JOBS - set(jobs))
+    # Pull requests from forks run no code that writes to the repository.
+    assert document["permissions"] == {"contents": "read"}
+
+    python_job = job_text(jobs["python"])
+    for command in ("ruff check", "ruff format --check", "mypy", "lint-imports", "check_django_config.py"):
+        assert command in python_job, command
+
+    sql_job = job_text(jobs["sql"])
+    assert "tests/test_schema_in_postgres.py" in sql_job
+    assert "test_migrations_consistent" in sql_job
+
+    contracts_job = job_text(jobs["contracts"])
+    for command in (
+        "tests/test_alignment.py",
+        "tools/check_traceability.py",
+        "spectral lint api/openapi.yaml",
+        "oasdiff",
+    ):
+        assert command in contracts_job, command
+    # There is no previous release to compare against until a tag exists, so the breaking
+    # change check must not fail the pull request that precedes the first one.
+    oasdiff_steps = [item for item in jobs["contracts"]["steps"] if "oasdiff" in json.dumps(item)]
+    assert oasdiff_steps, "no oasdiff step"
+    for step in oasdiff_steps:
+        assert "refs/tags" in (step.get("if") or ""), step
+
+    security_job = job_text(jobs["security"])
+    for scanner in ("gitleaks", "pip-audit", "semgrep", "bandit", "trivy"):
+        assert scanner in security_job, scanner
+
+    # The frontend does not exist yet (slice fe-00): every step that would run npm must be
+    # a no-op until frontend/package.json lands, so the pipeline is green today.
+    frontend_steps = jobs["frontend"]["steps"]
+    npm_steps = [step for step in frontend_steps if "npm" in str(step.get("run") or "")]
+    assert npm_steps, "the frontend job must run npm"
+    for step in npm_steps:
+        assert "hashFiles('frontend/package.json') != ''" in (step.get("if") or ""), step
+    frontend_job = job_text(jobs["frontend"])
+    for command in ("npm run lint", "npm run typecheck", "npm test", "npm run build"):
+        assert command in frontend_job, command
+
+    # Every action is pinned to a full commit SHA: a moving tag can change what runs here.
+    uses = re.findall(r"^\s*(?:-\s+)?uses:\s*(\S+)", CI_WORKFLOW.read_text(), re.MULTILINE)
+    assert uses, "no action is used"
+    for reference in uses:
+        assert re.search(r"@[0-9a-f]{40}$", reference), reference
+
+
+def test_verify_script_runs_slice_00_commands():
+    script = ROOT / "tools/scripts/verify_slice.sh"
+
+    printed = subprocess.run(  # noqa: S603 - fixed argv, no shell
+        ["bash", str(script), "00", "--print"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+
+    position = 0
+    for command in VERIFY_COMMANDS:
+        found = printed.find(command)
+        assert found >= 0, f"{command!r} missing from the printed plan:\n{printed}"
+        assert found >= position, f"{command!r} is out of order:\n{printed}"
+        position = found
+
+    unknown = subprocess.run(  # noqa: S603 - fixed argv, no shell
+        ["bash", str(script), "99", "--print"],
+        capture_output=True,
+        text=True,
+    )
+    assert unknown.returncode != 0, "an unknown slice must fail, not print an empty plan"

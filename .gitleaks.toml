@@ -1,0 +1,20 @@
+# Secret scanning (docs/09 sections 6 and 12.1). The default ruleset is kept whole; only
+# known documentation placeholders are allowed, so a real credential anywhere in the tree or
+# in history still fails the build.
+#
+# - .env.example carries the throwaway `dev` values of the local compose stack.
+# - api/openapi.yaml and docs/ are the specification: their examples are fabricated tokens,
+#   ids and keys, and gitleaks' entropy and JWT rules match them by design.
+# - tests/ contains the literal values that the redaction tests prove are masked.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documentation placeholders, the dev stack and redaction fixtures"
+paths = [
+  '''^\.env\.example$''',
+  '''^api/openapi\.yaml$''',
+  '''^docs/''',
+  '''^tests/''',
+]

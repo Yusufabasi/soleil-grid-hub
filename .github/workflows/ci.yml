@@ -1,0 +1,352 @@
+# The gates of docs/09 section 6, one job per kind of evidence (NFR-14, NFR-06).
+#
+# Every `uses:` is pinned to a commit SHA with the human-readable tag beside it: a moving
+# tag can change what runs in this repository without a commit here. Renovate proposes the
+# updates (renovate.json).
+#
+# The frontend does not exist until slice fe-00, so every npm step is guarded by
+# `hashFiles('frontend/package.json') != ''` and the pipeline is green today.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# One run per ref: a new push cancels the pull request's previous run (a main run is never
+# cancelled, because its result is the branch's evidence).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Nothing here writes to the repository: fork pull requests run with a read-only token.
+permissions:
+  contents: read
+
+env:
+  # Keep in step with backend/Dockerfile's base image (python:3.12-slim).
+  PYTHON_VERSION: "3.12"
+  # Keep in step with the uv version backend/Dockerfile installs.
+  UV_VERSION: "0.13.5"
+  GITLEAKS_VERSION: "8.30.1"
+  OASDIFF_VERSION: "1.34.1"
+
+jobs:
+  python:
+    name: python (lint, types, unit, integration)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install from the lockfile
+        run: uv sync --project backend --frozen
+      - name: ruff check
+        run: cd backend && ruff check .
+      - name: ruff format --check
+        run: cd backend && ruff format --check .
+      - name: mypy (strict)
+        run: cd backend && DJANGO_SETTINGS_MODULE=hub.settings.test mypy
+      - name: import-linter contracts
+        run: cd backend && lint-imports --config .importlinter
+      - name: Django configuration of every deployable
+        run: python tools/check_django_config.py
+      - name: unit and architecture tests
+        run: cd backend && python -m pytest tests/unit tests/architecture -q
+      # The harness starts Postgres and Redis containers, so the job needs the runner's
+      # Docker socket and pulls both images once.
+      - name: integration tests (Docker)
+        run: cd backend && python -m pytest tests/integration -q -m integration
+
+  frontend:
+    name: frontend (lint, types, tests, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: hashFiles('frontend/package.json') != ''
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: npm ci
+        if: hashFiles('frontend/package.json') != ''
+        run: cd frontend && npm ci
+      - name: npm run lint
+        if: hashFiles('frontend/package.json') != ''
+        run: cd frontend && npm run lint
+      - name: npm run typecheck
+        if: hashFiles('frontend/package.json') != ''
+        run: cd frontend && npm run typecheck
+      - name: npm test
+        if: hashFiles('frontend/package.json') != ''
+        run: cd frontend && npm test
+      - name: npm run build
+        if: hashFiles('frontend/package.json') != ''
+        run: cd frontend && npm run build
+      - name: no frontend yet
+        if: hashFiles('frontend/package.json') == ''
+        run: |
+          echo 'frontend/ is not in the tree yet (slice fe-00): nothing to lint, test or build'
+
+  sql:
+    name: sql (schema, baseline, migration pairing)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install from the lockfile
+        run: uv sync --project backend --frozen
+      # db/schema.sql loads into a real Postgres and every invariant it declares holds.
+      - name: db/schema.sql applies and its invariants hold
+        run: python -m pytest tests/test_schema_in_postgres.py -q -m integration
+      # The baseline is a byte copy, and baseline plus migrations equal db/schema.sql
+      # (TC-NFR-14-7); the pairing rules reject an orphan or a duplicated number.
+      - name: baseline equals db/schema.sql
+        run: cd backend && python -m pytest tests/integration/hubdb/test_migrations_consistent.py -q -m integration
+      - name: migration chain
+        run: cd backend && python -m pytest tests/integration/hubdb -q -m integration
+      - name: makemigrations reports no drift
+        run: cd backend && python manage.py makemigrations --check --dry-run --settings=hub.settings.api
+
+  contracts:
+    name: contracts (alignment, traceability, OpenAPI)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Full history: the breaking-change check reads api/openapi.yaml out of the previous
+      # release tag.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - name: Install from the lockfile
+        run: uv sync --project backend --frozen
+      # api/openapi.yaml is the authority (D-42); the docs must agree with it (TC-NFR-14-4).
+      - name: docs and code align with the contract
+        run: python -m pytest tests/test_alignment.py -q
+      - name: traceability ids resolve (TC-NFR-14-5)
+        run: python tools/check_traceability.py
+      - name: traceability test
+        run: python -m pytest tests/test_traceability.py -q
+      - name: infrastructure contracts
+        run: python -m pytest tests/test_infra_skeleton.py -q
+      - name: OpenAPI document is valid
+        run: |
+          python - <<'PY'
+          import yaml
+          from openapi_spec_validator import validate
+
+          validate(yaml.safe_load(open("api/openapi.yaml")))
+          print("api/openapi.yaml is a valid OpenAPI document")
+          PY
+      - name: spectral lint api/openapi.yaml
+        run: npx --yes @stoplight/spectral-cli@6 lint api/openapi.yaml
+
+      - name: Install oasdiff
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          curl -fsSL -o "${RUNNER_TEMP}/oasdiff.tar.gz" \
+            "https://github.com/oasdiff/oasdiff/releases/download/v${OASDIFF_VERSION}/oasdiff_${OASDIFF_VERSION}_linux_amd64.tar.gz"
+          tar -xzf "${RUNNER_TEMP}/oasdiff.tar.gz" -C "${RUNNER_TEMP}" oasdiff
+      # A breaking change must be accepted deliberately, not merged by accident. Until the
+      # first release tag exists there is nothing to compare against, so the step is skipped.
+      - name: no breaking change against the previous release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          previous=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
+          if [ -z "${previous}" ]; then
+            echo "no earlier release tag: nothing to compare against"
+            exit 0
+          fi
+          git show "${previous}:api/openapi.yaml" > "${RUNNER_TEMP}/openapi-base.yaml"
+          "${RUNNER_TEMP}/oasdiff" breaking "${RUNNER_TEMP}/openapi-base.yaml" api/openapi.yaml
+
+  security:
+    name: security (secrets, dependencies, static analysis)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install from the lockfile
+        run: uv sync --project backend --frozen
+
+      # History, not just the diff: a secret that was committed and deleted is still leaked.
+      - name: gitleaks (history and diff)
+        run: |
+          curl -fsSL -o "${RUNNER_TEMP}/gitleaks.tar.gz" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar -xzf "${RUNNER_TEMP}/gitleaks.tar.gz" -C "${RUNNER_TEMP}" gitleaks
+          "${RUNNER_TEMP}/gitleaks" detect --source . --config .gitleaks.toml \
+            --redact --no-banner --verbose
+
+      - name: pip-audit (backend lockfile)
+        run: |
+          uv export --project backend --frozen --no-emit-project \
+            --format requirements-txt -o "${RUNNER_TEMP}/requirements.txt"
+          uvx pip-audit -r "${RUNNER_TEMP}/requirements.txt" --strict --progress-spinner=off
+
+      - name: bandit
+        run: uvx bandit -q -r backend/src
+
+      # p/owasp-top-ten covers injection, SSRF, weak crypto and the deserialisation rules;
+      # the custom rules of docs/09 6 (no raw SQL string formatting) land with the first
+      # query in slice 04.
+      - name: semgrep (OWASP top ten)
+        run: uvx semgrep --config p/owasp-top-ten --error --quiet --exclude tests --exclude docs .
+
+      - name: no URL or query string in the balancer's access log (D-18)
+        run: |
+          if grep -rnE '^[[:space:]]*log-format[[:space:]].*(\$request_uri|%HU|%HQ|%r|ticket=)' infra/lb; then
+            echo "the access log must carry %HP only: the stream ticket is in the query string" >&2
+            exit 1
+          fi
+
+      - name: no secret in a NEXT_PUBLIC_* name
+        run: |
+          if grep -rnE 'NEXT_PUBLIC_[A-Z0-9_]*(SECRET|KEY|TOKEN|PASSWORD|PRIVATE)' \
+            --exclude-dir=.git --exclude-dir=node_modules .; then
+            echo "a NEXT_PUBLIC_* value is inlined into the browser bundle (docs/09 4.8)" >&2
+            exit 1
+          fi
+
+      # Misconfiguration and leaked secrets outside git history (Dockerfiles, compose,
+      # workflow files). Fixable HIGH and CRITICAL findings fail the build.
+      - name: trivy (filesystem, misconfiguration and secrets)
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
+  images:
+    name: images (hadolint, build, trivy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: hadolint backend/Dockerfile
+        run: docker run --rm -i hadolint/hadolint:v2.12.0 < backend/Dockerfile
+
+      - name: build soleil/hub
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: backend
+          file: backend/Dockerfile
+          load: true
+          tags: soleil/hub:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Only fixable HIGH and CRITICAL fail: an unfixed advisory in a base image is the
+      # registry's to resolve, and Renovate rebuilds weekly to pick the fix up.
+      - name: trivy image soleil/hub
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: soleil/hub:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
+      - name: hadolint frontend/Dockerfile
+        if: hashFiles('frontend/Dockerfile') != ''
+        run: docker run --rm -i hadolint/hadolint:v2.12.0 < frontend/Dockerfile
+
+      - name: build soleil/hub-web
+        if: hashFiles('frontend/Dockerfile') != ''
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: frontend
+          file: frontend/Dockerfile
+          load: true
+          tags: soleil/hub-web:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: trivy image soleil/hub-web
+        if: hashFiles('frontend/Dockerfile') != ''
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: soleil/hub-web:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
+  stack:
+    name: stack (make up, five pools healthy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install from the lockfile
+        run: uv sync --project backend --frozen
+
+      # TC-NFR-14-1: one command brings a clean clone to a healthy environment.
+      - name: make up
+        run: make up
+
+      - name: stack healthy through the balancer
+        run: backend/.venv/bin/python -m pytest tests/test_stack_up.py -q -m integration
+
+      - name: stack logs
+        if: failure()
+        run: |
+          docker compose -f infra/docker/compose.yaml ps
+          docker compose -f infra/docker/compose.yaml logs --tail 200
+
+      - name: make down
+        if: always()
+        run: make down

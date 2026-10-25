@@ -1,0 +1,5 @@
+# The OpenAPI gate of docs/09 section 6 ("Lint and format: ... spectral (OpenAPI)").
+# api/openapi.yaml is written by hand (D-42) and is the authority for the public contract,
+# so it is linted with the OpenAPI ruleset every pull request.
+extends:
+  - spectral:oas
