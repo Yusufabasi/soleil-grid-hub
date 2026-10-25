@@ -100,7 +100,7 @@ ignore_missing_imports = true
 # Test helpers that live outside the package: the root invariant parser and the
 # catalog fingerprint of the migration tests (both imported by path).
 [[tool.mypy.overrides]]
-module = ["test_schema_in_postgres", "fingerprint"]
+module = ["test_schema_in_postgres", "fingerprint", "support.db_alignment"]
 ignore_missing_imports = true
 
 # The plugin needs a settings module; tests run against the test settings (docs/03 section 9).

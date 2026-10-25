@@ -19,6 +19,14 @@ REPO_ROOT = BACKEND_DIR.parent
 # file's location", which is right for a checkout; the image sets it to /app.
 HUB_REPO_ROOT = env.str("HUB_REPO_ROOT", default="") or str(REPO_ROOT)
 
+# The contract files the permission class reads at start (docs/03 7.7 item 4): the allowed
+# roles per operation, and the operation list with its x-step-up / x-approval extensions.
+HUB_CONTRACT_DIR = str(Path(HUB_REPO_ROOT) / "api")
+
+# The custom user model is a shim over hub.users and has no Django auth machinery behind it
+# (docs/03 2.2); it is named here so a get_user_model() call resolves to the real table.
+AUTH_USER_MODEL = "identity.User"
+
 env.load(REPO_ROOT / ".env")
 
 # --- runtime identity -------------------------------------------------------------------

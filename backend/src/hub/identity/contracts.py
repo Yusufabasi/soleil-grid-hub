@@ -1,3 +1,9 @@
 """Public surface of `identity`: Protocols, DTOs and domain errors other modules
 may use. Nothing else in this package is importable from outside (docs/03 section 0).
 """
+
+from __future__ import annotations
+
+from hub.identity.domain.principal import Principal, PrincipalKind
+
+__all__ = ["Principal", "PrincipalKind"]
