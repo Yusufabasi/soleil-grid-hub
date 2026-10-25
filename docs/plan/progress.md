@@ -1,6 +1,6 @@
 # Progress: Soleil Grid Hub build
 
-Executor: implementing agent. Guide: `docs/plan/00-executor-guide.md`. Slice in progress: **00**
+Executor: implementing agent. Guide: `docs/plan/00-executor-guide.md`. Slice complete: **00**
 (`docs/plan/slice-00-walking-skeleton.md`). Update this file after every task (status, commit,
 test command and its summary line) and paste the full `make verify SLICE=00` output at the end
 of the slice.
@@ -20,7 +20,7 @@ of the slice.
 | 00.9 | Import-linter contracts and architecture tests | done | `e3122fe` | `cd backend && python -m pytest tests/architecture/test_importlinter.py -q` -> `11 passed` (skeleton clean, seven planted violations each caught, AST admin ban, generator current, module list matches packages); `make lint` -> exit 0 with `Contracts: 119 kept, 0 broken`; `pytest tests/unit tests/architecture -q` -> `96 passed`; `pytest tests/integration -q -m integration` -> `31 passed`; root `pytest tests -q` -> `36 passed` |
 | 00.10 | Images, compose stack, PgBouncer, HAProxy, stubs | done | `ab0fb82` | `python -m pytest tests/test_infra_skeleton.py -q` -> `6 passed` (five pools and routing order, log format without `%HU`/`%HQ`/`%r`, compose service and security matrix, one role URL per deployable, stub placeholders, PgBouncer transaction mode); `make up` -> 14 containers healthy, `migrate` and `db-logins` `Exited (0)`; `python -m pytest tests/test_stack_up.py -q -m integration` -> `1 passed`; `make lint` -> exit 0; root `pytest tests -q` -> `40 passed, 1 deselected` |
 | 00.11 | CI pipeline, security scans, verify script | done | `f027004` (contract fix `b33070f`) | `python -m pytest tests/test_infra_skeleton.py -q` -> `8 passed` (2 new: required jobs, SHA pins and read-only token, oasdiff behind a tag condition, frontend guarded by `hashFiles`, security scanners, verify plan in order); `actionlint 1.7.12 .github/workflows/ci.yml` -> exit 0; `gitleaks 8.30.1 detect --config .gitleaks.toml` -> `no leaks found` (17 commits); `npx @stoplight/spectral-cli@6 lint api/openapi.yaml` -> `0 errors, 118 warnings`, exit 0; root `python -m pytest tests -q` -> `42 passed, 1 deselected`; `make lint` -> exit 0 |
-| 00.12 | End-to-end verification, demo and evidence | not started | — | `make up && python -m pytest tests/test_stack_up.py -q -m integration` |
+| 00.12 | End-to-end verification, demo and evidence | done | `3153167` (defects fixed in `daeef46`, `938f2b3`) | `python -m pytest tests/test_stack_up.py -q -m integration` -> `5 passed` (five pools routed, request id owned by the balancer, stats UP, one JSON line per request with its trace id, no credential in the logs); `make verify SLICE=00` -> `Slice 00 verification PASSED (11 commands)`, exit 0; four failures observed first with the stack down (connection refused, empty logs) |
 
 ## Assumptions
 
@@ -212,14 +212,112 @@ of the slice.
   from a pinned release tag into `$RUNNER_TEMP` and run directly, with no `curl | sh` step.
   The oasdiff comparison is skipped until a `v*` tag exists, as the task requires.
 
+- **00.12 the stream pool runs one uvicorn process per container** (`daeef46`): with
+  `--workers 2` the supervisor killed the first worker mid-startup at the cold start, because
+  it pings a worker every 0.5 s and kills it after a 5 s silence, and the two processes also
+  raced for the metrics port — the loser died with `EADDRINUSE` on the read-only root. One
+  process per container, scaled by replicas (`server-template stream 2`), is the same shape as
+  the rest of the stack and has no supervisor to lose a race against.
+- **00.12 the metrics port is bound once, and losing it is not fatal**: `start_metrics_server`
+  logs and returns on `EADDRINUSE` (regression test binds a socket first), and the compose
+  environment now sets `PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus`, which `metrics.py` already
+  promised, so the process that holds the port serves every worker's series.
+- **00.12 healthchecks have a 45 s `start_period`**: a cold start imports Django in eight
+  containers at once, and without the grace a slow first import counted as a failed check, so
+  `up --wait` gave up on a stream container that was already coming up (the first cold start
+  failed on exactly that).
+- **00.12 MinIO needs an 8-character root password**: `.env.example` had `MINIO_ROOT_PASSWORD=dev`,
+  which MinIO refuses; the entrypoint retried for a minute and exited 1, so `make up` failed on
+  a container that used to be healthy because it predated the variable. The example and the
+  compose default are now `dev-dev-dev`, and the local `.env` gained both MinIO lines.
+- **00.12 one access line per request**: demo step 5 needs a JSON line carrying `request_id`,
+  `trace_id` and `service`, and docs/09 8 assumes an application access log. `RequestContextMiddleware`
+  now writes `request.completed` (method, path, status, route, duration_ms) while the context is
+  still bound, and `request.path` never carries a query string (D-18). Health probes are logged
+  at INFO too, which is ~2 lines/s on this stack; a later slice can sample them.
+- **00.12 gunicorn's own lines are JSON as well**: gunicorn attaches its own handler and stops
+  propagation, so `configure_logging` re-points `gunicorn.error`/`gunicorn.access` at the root
+  structlog handler once the application is loaded (docs/03 7.3: "one format").
+- **00.12 the tracing middleware must be outermost**: `middleware_position` moved 1 -> 0.
+  Inside the application middleware the span is not current when the access line is written and
+  `trace_id` was null; verified end to end — the line's trace id appears once in the collector.
+- **00.12 a fresh pool answers 503 for a few seconds**: `docker compose up --wait` returns as
+  soon as the container's own healthcheck passes, but HAProxy needs `rise 3` (~6 s) before it
+  routes, so the stack tests poll for up to 20 s before asserting instead of reading the first
+  response as the verdict.
+- **00.12 the second `server-template` slot is `MAINT (resolution)`**: two slots are reserved
+  for scale-out and only one container runs, so the stats test requires at least one `UP`
+  server per pool and accepts a template slot with no container behind it as a placeholder.
+- **00.12 the verify script calls the checker instead of four bare checks**: `manage.py check
+  --deploy` loads the checkout's `.env` (`HUB_ENV=local`) and fails on DEBUG for every module,
+  which says nothing about the deployable; `tools/check_django_config.py` runs the same check
+  for all six modules with the fallback deployment environment.
+- **00.12 demo step 8 as observed**: adding `django.contrib.admin` makes `make lint` fail inside
+  mypy's Django plugin before the AST rule prints, so the rule is demonstrated with
+  `python tools/check_django_config.py`, which names it (`D-42: never installed`); both gates
+  are part of `make lint`.
+
 ## Open change requests
 
 None.
 
 ## Evidence
 
-`make verify SLICE=00` output: pending (task 00.12).
-Demo script result: pending (task 00.12).
+### `make verify SLICE=00`, 2026-10-25 (tree of `3153167`)
+
+`tools/scripts/verify_slice.sh 00` ran eleven commands in order and printed
+`Slice 00 verification PASSED (11 commands).` with exit 0. Transcript below, one result line per
+command; the docker build progress of `make up` (about 430 lines of layer output) is elided and
+its result kept.
+
+```
+$ make verify SLICE=00
+==> make lint
+All checks passed!                                       # ruff check
+160 files already formatted                              # ruff format --check
+Success: no issues found in 158 source files             # mypy strict
+Contracts: 119 kept, 0 broken.                           # import-linter
+Django configuration checks passed
+==> cd backend && python -m pytest tests/unit tests/architecture -q
+98 passed in 18.67s
+==> cd backend && python -m pytest tests/integration -q -m integration -p no:cacheprovider --strict-markers -rs
+31 passed in 37.24s
+==> python -m pytest tests -q
+42 passed, 5 deselected in 112.10s (0:01:52)
+==> python tools/check_traceability.py
+0 error(s), 0 warning(s)
+==> python tools/check_django_config.py
+Django configuration checks passed
+==> cd backend && python manage.py makemigrations --check --dry-run --settings=hub.settings.api
+No changes detected
+==> make up
+    ... 14 containers Healthy, migrate and db-logins Exited (0)
+==> python -m pytest tests/test_stack_up.py -q -m integration
+5 passed in 6.01s
+==> docker compose --env-file .env -f infra/docker/compose.yaml config -q
+    (no output, exit 0)
+==> if command -v actionlint >/dev/null 2>&1; then actionlint; else ... fi
+actionlint is not installed: workflow lint skipped
+Slice 00 verification PASSED (11 commands).
+```
+
+Two differences from the slice's Verification list, both recorded as assumptions above: the
+four per-module `manage.py check --deploy` commands are executed by `tools/check_django_config.py`
+with its deployment fallback environment, and `actionlint` is optional in `make lint` — it is not
+installed on this machine, so it was run by hand (`actionlint 1.7.12` -> exit 0).
+
+### Demo script, as observed
+
+| # | Command | Observed |
+|---|---|---|
+| 1 | `make reset && make up` (empty volume) | exit 0 in 67 s with the image already built (the 00.10 build adds about two minutes); 14 containers `Healthy`, `migrate` and `db-logins` `Exited (0)` — TC-NFR-14-1 well inside ten minutes |
+| 2 | `curl -si localhost:8080/api/v1/health/live` | `HTTP/1.1 200 OK`, `x-request-id: 2eed5a0c-a9d3-46f1-a7a7-c2ba5200308b`, `{"data":{"status":"ok","version":"dev",...}}` |
+| 3 | `curl -si localhost:8080/api/v1/health/ready` | `200`, `{"data":{"status":"ok",...,"checks":[{"name":"postgres","status":"ok","latency_ms":96},{"name":"redis",...,13}]}}` |
+| 4 | `curl -si localhost:8080/` | `200` from the `hub-web` stub |
+| 5 | `docker compose logs hub-api \| tail -1` | one JSON line: `{"method":"GET","path":"/api/v1/health/live","status":200,"route":"api/v1/health/live","duration_ms":0.683,"event":"request.completed","service":"hub-api","version":"dev","env":"local","level":"info","ts":"2026-10-25T02:38:37.528361Z","request_id":"2eed5a0c-...","correlation_id":"2eed5a0c-...","entrypoint":"hub-api","trace_id":"ae6d1045675b4a0fb6f35023ee0050af"}` |
+| 6 | `docker compose logs otel-collector \| grep ae6d1045...` | one span: the trace id in the log line is the trace id the collector received |
+| 7 | `docker compose stop hub-ingest-webhooks`, 9 s, stats; then `start`, 33 s | `be_webhooks DOWN` while `be_api UP` and `be_telemetry UP`; after the restart `be_webhooks UP` again and a POST through the balancer reaches the pool |
+| 8 | `django.contrib.admin` in `INSTALLED_APPS`; `import anthropic` in `hub.payments.domain` | `python tools/check_django_config.py`: `INSTALLED_APPS installs django.contrib.admin (D-42: never installed)`; `lint-imports`: `hub is not allowed to import anthropic ... Only the ai_gateway adapter imports the AI SDK`. Both reverted; `git status` clean before the next run |
 
 ### Task 00.10: the stack, as observed
 
