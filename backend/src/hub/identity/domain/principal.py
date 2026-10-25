@@ -31,6 +31,10 @@ class Principal:
 
     subject_id: UUID
     kind: PrincipalKind
+    # Presentation facts about the account, carried so the API can answer with one object
+    # (``api/openapi.yaml`` Principal requires ``display_name``). They grant nothing.
+    display_name: str = ""
+    mfa_enrolled: bool = False
     roles: frozenset[str] = frozenset()
     attributes: frozenset[str] = frozenset()
     permissions: frozenset[str] = frozenset()

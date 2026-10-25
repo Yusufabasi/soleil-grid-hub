@@ -20,12 +20,12 @@ from uuid import UUID
 
 from django.db import connection
 
-from hub.identity.application.tokens import TokenClaims
+from hub.identity.contracts import SessionRow, TokenClaims
 from hub.identity.domain.principal import Locale, Principal
 from hub.shared.contracts import KeyValueStore
 from hub.shared.errors import Unauthenticated
 
-__all__ = ["TOKEN_VERSION_TTL_SECONDS", "UserRecord", "UserRepository"]
+__all__ = ["TOKEN_VERSION_TTL_SECONDS", "SessionRepository", "UserRecord", "UserRepository"]
 
 # How long a token version may be stale; a bump deletes the key, so this bounds only the
 # window in which another process's bump is not yet visible.
@@ -202,6 +202,8 @@ class UserRepository:
         return Principal(
             subject_id=record.id,
             kind=cast("Any", claims.kind),
+            display_name=record.display_name,
+            mfa_enrolled=record.mfa_enrolled,
             roles=self.roles_of(record.id),
             attributes=record.attributes,
             permissions=self.permissions_of(record.id),
@@ -214,6 +216,127 @@ class UserRepository:
             locale=cast("Locale", record.locale),
         )
 
+    def build_principal(
+        self,
+        user_id: UUID,
+        *,
+        session_id: UUID | None,
+        auth_time: datetime,
+        acr: str,
+    ) -> Principal:
+        """The caller for an already-proven session (refresh, step-up), without a token to check."""
+        record = self.get(user_id)
+        if record is None or record.status != "active":
+            raise Unauthenticated(code="token_revoked")
+        return Principal(
+            subject_id=record.id,
+            kind="staff",
+            display_name=record.display_name,
+            mfa_enrolled=record.mfa_enrolled,
+            roles=self.roles_of(record.id),
+            attributes=record.attributes,
+            permissions=self.permissions_of(record.id),
+            site_ids=self.site_ids_of(record.id),
+            session_id=session_id,
+            token_version=record.token_version,
+            auth_time=auth_time,
+            acr=acr,
+            locale=cast("Locale", record.locale),
+        )
+
     @staticmethod
     def _version_key(user_id: UUID) -> str:
         return f"tv:{user_id}"
+
+
+# Column order of a refresh-token row; spelled out so a schema change cannot reorder it.
+_SESSION_SELECT = (
+    "SELECT id, user_id, customer_id, family_id, issued_at, expires_at, rotated_at, revoked_at "
+    "FROM hub.refresh_tokens"
+)
+
+
+def _session(row: Any) -> SessionRow:
+    values = tuple(row)
+    return SessionRow(
+        id=cast("UUID", values[0]),
+        user_id=cast("UUID | None", values[1]),
+        customer_id=cast("UUID | None", values[2]),
+        family_id=cast("UUID", values[3]),
+        issued_at=cast("datetime", values[4]),
+        expires_at=cast("datetime", values[5]),
+        rotated_at=cast("datetime | None", values[6]),
+        revoked_at=cast("datetime | None", values[7]),
+    )
+
+
+class SessionRepository:
+    """``SessionStore`` over ``hub.refresh_tokens``."""
+
+    def insert(
+        self,
+        row: SessionRow,
+        token_hash: bytes,
+        *,
+        ip: str | None,
+        user_agent: str | None,
+    ) -> None:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO hub.refresh_tokens "
+                "(id, user_id, customer_id, family_id, token_hash, issued_at, expires_at, ip, "
+                "user_agent) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                [
+                    row.id,
+                    row.user_id,
+                    row.customer_id,
+                    row.family_id,
+                    token_hash,
+                    row.issued_at,
+                    row.expires_at,
+                    ip,
+                    user_agent,
+                ],
+            )
+
+    def find_by_hash(self, token_hash: bytes, *, for_update: bool = False) -> SessionRow | None:
+        statement = _SESSION_SELECT + " WHERE token_hash = %s"
+        if for_update:
+            statement += " FOR UPDATE"
+        with connection.cursor() as cursor:
+            cursor.execute(statement, [token_hash])
+            row = cursor.fetchone()
+        return _session(row) if row is not None else None
+
+    def family_first_issued_at(self, family_id: UUID) -> datetime | None:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT min(issued_at) FROM hub.refresh_tokens WHERE family_id = %s",
+                [family_id],
+            )
+            row = cursor.fetchone()
+        return cast("datetime | None", row[0]) if row is not None else None
+
+    def mark_rotated(self, session_id: UUID, *, at: datetime, replaced_by: UUID) -> None:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE hub.refresh_tokens SET rotated_at = %s, replaced_by = %s "
+                "WHERE id = %s AND rotated_at IS NULL",
+                [at, replaced_by, session_id],
+            )
+
+    def revoke_family(self, family_id: UUID, *, at: datetime) -> int:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE hub.refresh_tokens SET revoked_at = coalesce(revoked_at, %s) "
+                "WHERE family_id = %s",
+                [at, family_id],
+            )
+            return int(cursor.rowcount)
+
+    def revoke(self, session_id: UUID, *, at: datetime) -> None:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE hub.refresh_tokens SET revoked_at = coalesce(revoked_at, %s) WHERE id = %s",
+                [at, session_id],
+            )

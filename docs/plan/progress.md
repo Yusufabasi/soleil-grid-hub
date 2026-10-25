@@ -30,7 +30,7 @@ of the slice.
 | 01.1 | Unmanaged identity models and the permission class | done | `9bb28a3` | `cd backend && python -m pytest tests/architecture/test_permissions_yaml.py tests/architecture/test_identity_models.py -q` -> `10 passed`; `pytest tests/unit tests/architecture -q` -> `108 passed`; `pytest tests/integration -q -m integration` -> `31 passed`; root `pytest tests -q` -> `42 passed, 5 deselected`; `make lint` -> exit 0 (ruff, format, mypy strict, import-linter 119 kept, Django config checks) |
 | 01.2 | Audit adapter and audit view | done | `1326c43` (prerequisite fix `50e8ac9`, refactor `d9b9275`) | `cd backend && python -m pytest tests/integration/identity/test_audit.py tests/integration/admin/test_audit_view.py -q` -> `14 passed` (chained seq and prev_hash, actor and address stored without personal details, deny-list refused, outcome lifted out of details, `hub_api` cannot UPDATE or DELETE, a tampered row reported at its exact seq, an anchor that no longer matches the head reported, administrator page plus its own `audit.read`, support agent 403 writing nothing, cursor paging, tampered cursor 400, missing stream 400, action prefix); `pytest -q` -> `153 passed, 0 skipped`; root `pytest tests -q` -> `42 passed, 5 deselected`; `make lint` -> exit 0 (ruff, format, mypy strict 176 files, import-linter 119 kept, Django config checks); `check_traceability.py` -> 0 errors; `openapi.yaml` valid |
 | 01.3 | EdDSA access tokens and bearer authentication | done | see below | `cd backend && python -m pytest tests/unit/identity/test_tokens.py tests/integration/identity/test_bearer.py -q` -> `18 passed` (600 s lifetime and claim set, no roles claim, `alg: none` refused, HS256 key confusion refused, leeway boundary on a frozen clock, edited payload refused, foreign issuer and over-long lifetime refused; live token authenticates, missing/garbage/non-bearer 401, stale `tv` 401 `token_revoked` with a warm and a cold cache, suspended and soft-deleted users refused, authority read from the database after a grant); `pytest -q` -> `171 passed`; `make lint` -> exit 0 (ruff, format, mypy strict 183 files, import-linter 119 kept, Django config checks) |
-| 01.4 | Refresh sessions, cookie views and CSRF guard | not started | — | — |
+| 01.4 | Refresh sessions, cookie views and CSRF guard | done | see below | `cd backend && python -m pytest tests/integration/identity/test_refresh.py tests/integration/identity/test_csrf.py -q` -> `22 passed` (exact cookie attributes and no refresh token in JSON, rotation, replay one second later revokes the family, idle boundary at 1799/1800+ and absolute at the eighth hour, body transport only with the header, logout revokes and clears, refreshed principal keeps the login `auth_time`, a grant appears in the refreshed principal; four CSRF failures x two endpoints, a cookie alone does not authenticate a bearer operation); `pytest -q` -> `193 passed`; `make lint` -> exit 0 |
 | 01.5 | Local break-glass login, TOTP, recovery codes | not started | — | — |
 | 01.6 | WebAuthn registration, assertion, enforcement | not started | — | — |
 | 01.7 | OIDC code exchange in hub-api | not started | — | — |
@@ -119,6 +119,27 @@ of the slice.
   `role_permissions` on every authentication, alongside roles, attributes and sites. One
   query more, no cache to invalidate, and the audit adapter's `audit.read` check stays the
   second line of defence it already was.
+- **01.4 the session keeps its auth instant in Redis**: `hub.refresh_tokens` has no `auth_time`
+  or `acr` column, and a refreshed token must not reset the step-up clock (D-16). `issue`
+  stores `{"auth_time", "acr"}` under `session_auth:{session_id}` with the family's absolute
+  TTL, rotation copies it to the successor row, and a lost entry falls back to the family's
+  first `issued_at` with `acr="pwd"` — the conservative direction, because an older instant
+  can only make a step-up more likely.
+- **01.4 limits are injected, not read from settings**: the application layer may not import
+  Django (import-linter), so `SessionService` takes `SessionLimits` for staff and customer and
+  wiring passes the four settings. `limits_for(kind)` is what the boundary test pins.
+- **01.4 the cookie views are plain Django views**: DRF is built around a body and these two
+  read a cookie, so `refresh_view`/`logout_view` use `@require_POST` plus `@cookie_csrf_guard`
+  and let `DomainErrorMiddleware` render the problem document. Body transport reads
+  `refresh_token` from JSON only when `X-Token-Transport: body`; there is no serializer in the
+  plain-view path because a DRF `ValidationError` would not be converted to problem+json there.
+- **01.4 logout is idempotent and needs the cookie**: a logout without a cookie answers 204 and
+  clears it, because there is nothing to revoke and surfacing a 401 would tell an attacker
+  whether the cookie was still live. The bearer half of the operation's security block is not
+  used yet; it arrives with `/me` in Task 01.8.
+- **01.4 `Principal` gained `display_name` and `mfa_enrolled`**: `api/openapi.yaml` requires
+  `display_name` in every `Principal` document, and the account facts belong to the caller's
+  DTO rather than to a serializer that would have to fetch them again. They grant nothing.
 - **01.1 tests beyond the plan's three**: the plan names the completeness test, the
   role-denial test and the undeclared-view test. Two more pin the other two outcomes of the
   same class (the listed role is allowed, no principal is 401), so the 401/403/200 triangle is

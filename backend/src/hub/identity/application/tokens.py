@@ -17,12 +17,12 @@ Three properties are enforced rather than assumed, because each is a way tokens 
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
 import jwt
 
+from hub.identity.contracts import TokenClaims
 from hub.identity.domain.principal import BASIC_ACR, MFA_ACR, Principal
 from hub.shared.errors import Unauthenticated
 from hub.shared.ports import Clock, IdGenerator
@@ -40,24 +40,6 @@ KNOWN_KINDS = frozenset({"staff", "customer", "provider", "gateway", "integrator
 # A token that verifies but claims a longer life than this API issues is refused: the
 # signature only proves *who* signed it, not that it came from this service.
 _LIFETIME_SLACK_SECONDS = 1
-
-
-@dataclass(frozen=True, slots=True)
-class TokenClaims:
-    """What a verified access token says: identity and session, never power."""
-
-    subject_id: UUID
-    session_id: UUID
-    kind: str
-    token_version: int
-    locale: str
-    auth_time: datetime
-    acr: str
-    amr: tuple[str, ...]
-
-    @property
-    def has_mfa(self) -> bool:
-        return self.acr in {MFA_ACR, "phr"}
 
 
 def _uuid_claim(claims: dict[str, object], name: str) -> UUID:

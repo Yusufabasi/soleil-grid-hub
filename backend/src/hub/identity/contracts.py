@@ -18,10 +18,31 @@ __all__ = [
     "AuditOutcome",
     "Principal",
     "PrincipalKind",
+    "SessionRow",
+    "SessionStore",
+    "TokenClaims",
 ]
 
 # The three endings of an audited action (api/openapi.yaml, ``AuditEntry.outcome``).
 AuditOutcome = Literal["success", "denied", "error"]
+
+
+@dataclass(frozen=True, slots=True)
+class TokenClaims:
+    """What a verified access token says: identity and session, never power."""
+
+    subject_id: UUID
+    session_id: UUID
+    kind: str
+    token_version: int
+    locale: str
+    auth_time: datetime
+    acr: str
+    amr: tuple[str, ...]
+
+    @property
+    def has_mfa(self) -> bool:
+        return self.acr in {"mfa", "phr"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +67,56 @@ class AuditEntry:
     details: Mapping[str, Any]
     hash: str
     prev_hash: str
+
+
+@dataclass(frozen=True, slots=True)
+class SessionRow:
+    """One row of ``hub.refresh_tokens``, as the session service reasons about it.
+
+    A row is one refresh token: its family is the login, and the first row of the family pins
+    the absolute limit. ``rotated_at``/``revoked_at`` are what make a replay detectable.
+    """
+
+    id: UUID
+    user_id: UUID | None
+    customer_id: UUID | None
+    family_id: UUID
+    issued_at: datetime
+    expires_at: datetime
+    rotated_at: datetime | None
+    revoked_at: datetime | None
+
+    @property
+    def kind(self) -> str:
+        """The account kind the session belongs to: staff sessions name a user, customer ones a customer."""
+        return "staff" if self.user_id is not None else "customer"
+
+
+class SessionStore(Protocol):
+    """The rows of ``hub.refresh_tokens`` (docs/03 2.2, D-17).
+
+    ``find_by_hash(..., for_update=True)`` locks the row: rotation is a compare-and-set and two
+    tabs refreshing at once must not both succeed.
+    """
+
+    def insert(
+        self,
+        row: SessionRow,
+        token_hash: bytes,
+        *,
+        ip: str | None,
+        user_agent: str | None,
+    ) -> None: ...
+
+    def find_by_hash(self, token_hash: bytes, *, for_update: bool = False) -> SessionRow | None: ...
+
+    def family_first_issued_at(self, family_id: UUID) -> datetime | None: ...
+
+    def mark_rotated(self, session_id: UUID, *, at: datetime, replaced_by: UUID) -> None: ...
+
+    def revoke_family(self, family_id: UUID, *, at: datetime) -> int: ...
+
+    def revoke(self, session_id: UUID, *, at: datetime) -> None: ...
 
 
 class AuditLog(Protocol):

@@ -16,10 +16,11 @@ import threading
 
 from django.conf import settings
 
+from hub.identity.application.sessions import SessionLimits, SessionService
 from hub.identity.application.tokens import AccessTokenService
 from hub.identity.contracts import AuditLog, Principal
 from hub.identity.infrastructure.audit import HubAuditLog
-from hub.identity.infrastructure.repositories import UserRepository
+from hub.identity.infrastructure.repositories import SessionRepository, UserRepository
 from hub.shared.clock import SystemClock
 from hub.shared.contracts import KeyValueStore
 from hub.shared.ids import Uuid7Generator
@@ -31,6 +32,7 @@ __all__ = [
     "clock",
     "ids",
     "reset",
+    "sessions",
     "store",
     "tokens",
     "unit_of_work",
@@ -43,14 +45,15 @@ _ids: Uuid7Generator | None = None
 _store: KeyValueStore | None = None
 _tokens: AccessTokenService | None = None
 _users: UserRepository | None = None
+_sessions: SessionService | None = None
 _audit_log: AuditLog | None = None
 
 
 def reset() -> None:
     """Drop every cached adapter; tests use it after changing a setting."""
-    global _clock, _ids, _store, _tokens, _users, _audit_log  # noqa: PLW0603
+    global _clock, _ids, _store, _tokens, _users, _sessions, _audit_log  # noqa: PLW0603
     with _lock:
-        _clock = _ids = _store = _tokens = _users = _audit_log = None
+        _clock = _ids = _store = _tokens = _users = _sessions = _audit_log = None
 
 
 def clock() -> SystemClock:
@@ -110,6 +113,30 @@ def users() -> UserRepository:
             if _users is None:
                 _users = UserRepository(store())
     return _users
+
+
+def sessions() -> SessionService:
+    """The refresh-session service, with the idle and absolute limits from settings."""
+    global _sessions  # noqa: PLW0603
+    if _sessions is None:
+        with _lock:
+            if _sessions is None:
+                _sessions = SessionService(
+                    clock=clock(),
+                    ids=ids(),
+                    store=store(),
+                    sessions=SessionRepository(),
+                    audit=audit_log(),
+                    staff_limits=SessionLimits(
+                        idle_seconds=int(settings.HUB_STAFF_IDLE_SECONDS),
+                        absolute_seconds=int(settings.HUB_STAFF_ABSOLUTE_SECONDS),
+                    ),
+                    customer_limits=SessionLimits(
+                        idle_seconds=int(settings.HUB_CUSTOMER_IDLE_SECONDS),
+                        absolute_seconds=int(settings.HUB_CUSTOMER_ABSOLUTE_SECONDS),
+                    ),
+                )
+    return _sessions
 
 
 def audit_log() -> AuditLog:
