@@ -122,14 +122,15 @@ paths:
                   data:
                     $ref: '#/components/schemas/MfaChallenge'
               example:
-                mfa_required: true
-                mfa_token: mfa_0192f3a4c7
-                mfa_token_expires_in: 300
-                enrollment_required: false
-                methods:
-                - totp
-                - webauthn
-                - recovery_code
+                data:
+                  mfa_required: true
+                  mfa_token: mfa_0192f3a4c7
+                  mfa_token_expires_in: 300
+                  enrollment_required: false
+                  methods:
+                  - totp
+                  - webauthn
+                  - recovery_code
         '400':
           $ref: '#/components/responses/BadRequest'
         '422':
@@ -295,25 +296,26 @@ paths:
                   data:
                     $ref: '#/components/schemas/TokenPair'
               example:
-                access_token: eyJhbGciOiJFZERTQSIsImtpZCI6ImsxIn0.eyJzdWIiOiIwMTkyZi4uLiJ9.sig
-                token_type: Bearer
-                expires_in: 600
-                refresh_expires_in: 28800
-                principal:
-                  id: 0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f0032
-                  type: staff
-                  display_name: Amina K.
-                  roles:
-                  - finance_officer
-                  attributes:
-                  - finance_lead
-                  scopes: []
-                  site_ids:
-                  - 0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f000a
-                  locale: fr
-                  mfa_enrolled: true
-                  acr: mfa
-                  auth_time: '2026-10-24T08:15:30Z'
+                data:
+                  access_token: eyJhbGciOiJFZERTQSIsImtpZCI6ImsxIn0.eyJzdWIiOiIwMTkyZi4uLiJ9.sig
+                  token_type: Bearer
+                  expires_in: 600
+                  refresh_expires_in: 28800
+                  principal:
+                    id: 0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f0032
+                    type: staff
+                    display_name: Amina K.
+                    roles:
+                    - finance_officer
+                    attributes:
+                    - finance_lead
+                    scopes: []
+                    site_ids:
+                    - 0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f000a
+                    locale: fr
+                    mfa_enrolled: true
+                    acr: mfa
+                    auth_time: '2026-10-24T08:15:30Z'
         '400':
           $ref: '#/components/responses/BadRequest'
         '422':
@@ -979,9 +981,10 @@ paths:
                   data:
                     $ref: '#/components/schemas/OtpChallenge'
               example:
-                challenge_id: 0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f003c
-                expires_in: 300
-                resend_after: 60
+                data:
+                  challenge_id: 0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f003c
+                  expires_in: 300
+                  resend_after: 60
         '400':
           $ref: '#/components/responses/BadRequest'
         '422':
@@ -3752,12 +3755,13 @@ paths:
                   data:
                     $ref: '#/components/schemas/TelemetryBatchResult'
               example:
-                batch_id: 0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f0046
-                accepted: 2
-                duplicates: 0
-                late: 0
-                rejected: 0
-                rejected_items: []
+                data:
+                  batch_id: 0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f0046
+                  accepted: 2
+                  duplicates: 0
+                  late: 0
+                  rejected: 0
+                  rejected_items: []
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
