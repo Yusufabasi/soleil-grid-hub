@@ -274,6 +274,11 @@ def test_compose_services_and_security():
         keys = set(environment_of(stack[name])) & DB_URL_VARIABLES
         assert keys == ROLE_URLS[name], (name, sorted(keys))
 
+    # One metrics port per container, one file per worker: with several workers only the
+    # multiprocess registry is complete, and the stream pool runs uvicorn's own processes.
+    for name in PYTHON_SERVICES:
+        assert environment_of(stack[name]).get("PROMETHEUS_MULTIPROC_DIR") == "/tmp/prometheus", name
+
     # Application containers start only after the schema exists and the roles can log in.
     for name in PYTHON_SERVICES - {"migrate"}:
         depends = stack[name].get("depends_on") or {}

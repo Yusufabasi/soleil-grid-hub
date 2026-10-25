@@ -12,6 +12,7 @@ import re
 import time
 from collections.abc import Callable
 
+import structlog
 from django.conf import settings
 from django.http import HttpRequest, HttpResponse
 
@@ -23,6 +24,8 @@ from hub.shared.metrics import HTTP_DURATION, HTTP_REQUESTS
 
 GetResponse = Callable[[HttpRequest], HttpResponse]
 
+logger = structlog.get_logger(__name__)
+
 # Only the balancer may supply an id, and only a well-formed one (D-13): an inbound value
 # is echoed back in a response header, so anything else is replaced by a fresh UUIDv7.
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9-]{8,64}$")
@@ -33,6 +36,23 @@ def _route_label(request: HttpRequest) -> str:
     match = getattr(request, "resolver_match", None)
     route = getattr(match, "route", None) if match is not None else None
     return route or "unmatched"
+
+
+def _log_request(request: HttpRequest, started: float, status: int) -> None:
+    """One JSON line per request (docs/09 8), with the path and never the query string.
+
+    ``request.path`` excludes the query string, so a stream ticket cannot reach a log sink
+    (D-18); the context processors add ``request_id`` and ``trace_id``, which is what joins
+    this line to the balancer's log and to the collector's span.
+    """
+    logger.info(
+        "request.completed",
+        method=request.method,
+        path=request.path,
+        status=status,
+        route=_route_label(request),
+        duration_ms=round((time.perf_counter() - started) * 1000, 3),
+    )
 
 
 class RequestContextMiddleware:
@@ -63,6 +83,13 @@ class RequestContextMiddleware:
         started = time.perf_counter()
         try:
             response = self.get_response(request)
+        except Exception:
+            # A request that raises still leaves a line: the id and the duration are how the
+            # 500 is found again.
+            _log_request(request, started, 500)
+            raise
+        else:
+            _log_request(request, started, response.status_code)
         finally:
             reset_context(tokens)
 

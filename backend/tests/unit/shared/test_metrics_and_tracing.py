@@ -6,12 +6,20 @@ line's trace id must equal the OTel span's trace id so one search joins them.
 
 from __future__ import annotations
 
+import os
+import socket
+import tempfile
+from pathlib import Path
+from unittest import mock
+
 from django.http import HttpResponse
 from django.test import SimpleTestCase, override_settings
 from django.urls import path
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from prometheus_client import REGISTRY
 
+from hub.shared import metrics
+from hub.shared.metrics import start_metrics_server
 from hub.shared.tracing import add_trace_id, configure_tracing
 
 
@@ -52,6 +60,44 @@ class RequestMetricsTests(SimpleTestCase):
                 self.assertEqual(set(sample.labels), {"service", "route", "code"})
                 self.assertNotIn("42", sample.labels["route"])
         assert found, "http_requests_total not found in the registry"
+
+
+class MetricsServerTests(SimpleTestCase):
+    """One metrics port per container; a second process must survive losing the bind.
+
+    ``uvicorn --workers`` starts independent processes that each import the ASGI module, so
+    every one of them calls ``start_metrics_server``. The first binds the port, the rest find
+    it taken: before this was tolerated, the losing worker died with ``EADDRINUSE`` on a
+    read-only root and the stream container never reached a steady state.
+    """
+
+    def setUp(self) -> None:
+        self._was_started = metrics._started
+        metrics._started = False
+
+    def tearDown(self) -> None:
+        metrics._started = self._was_started
+
+    def test_bound_port_does_not_take_the_process_down(self) -> None:
+        with socket.socket() as taken:
+            taken.bind(("0.0.0.0", 0))
+            taken.listen(1)
+            port = taken.getsockname()[1]
+
+            with self.assertLogs("hub.shared.metrics", level="WARNING") as captured:
+                start_metrics_server(port=port)
+
+        assert "already bound" in captured.output[0]
+
+    def test_multiprocess_directory_is_created(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "prometheus"
+            with mock.patch.dict(os.environ, {"PROMETHEUS_MULTIPROC_DIR": str(directory)}):
+                start_metrics_server(port=0)
+
+            # The workers open one file each from their first counter, so the directory has to
+            # exist before the process that serves the shared registry is even up.
+            assert directory.is_dir()
 
 
 class TracingTests(SimpleTestCase):

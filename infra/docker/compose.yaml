@@ -63,6 +63,10 @@ x-app: &app
     HUB_TRUST_LB_REQUEST_ID: "true"
     HUB_DRAIN_FILE: /tmp/draining
     HUB_METRICS_PORT: "9102"
+    # One metrics port per container, one file per worker in this directory: whichever process
+    # wins the bind serves the whole pool's series (docs/09 section 5). /tmp is the tmpfs
+    # mount, so the files never outlive the container.
+    PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus
     HUB_REPO_ROOT: /app
     HUB_PROBLEM_BASE_URL: ${HUB_PROBLEM_BASE_URL:-https://hub.soleilgrid.example/problems/}
     OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
@@ -177,8 +181,12 @@ services:
       - 0.0.0.0
       - --port
       - "8000"
+      # One process per container, scaled by replicas (`server-template stream 2`): uvicorn's
+      # multi-worker supervisor kills a worker that misses a 5 s healthcheck while the machine
+      # is busy starting the rest of the stack, which is exactly when a slow first import
+      # happens, and two processes in one container would also race for the metrics port.
       - --workers
-      - "2"
+      - "1"
       - --timeout-graceful-shutdown
       - "30"
       - --timeout-keep-alive
@@ -368,8 +376,10 @@ services:
   minio:
     image: bitnamilegacy/minio:2025.7.23-debian-12-r5
     environment:
+      # MinIO refuses a root password shorter than 8 characters; a 3-letter default would
+      # abort the entrypoint after a minute of retries instead of failing at the first line.
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-dev}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-dev}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-dev-dev-dev}
       MINIO_DEFAULT_BUCKETS: hub-local
     ports:
       - "9000:9000"

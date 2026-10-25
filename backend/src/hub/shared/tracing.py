@@ -86,8 +86,10 @@ def configure_tracing(service: str, *, exporter: SpanExporter | None = None) -> 
         DjangoInstrumentor().instrument(
             tracer_provider=provider,
             request_hook=_request_hook,
-            # RequestContextMiddleware stays first (docs/03 section 7.3).
-            middleware_position=1,
+            # Position 0, outside every application middleware: the request span has to be
+            # current while RequestContextMiddleware writes the access line, or that line's
+            # `trace_id` is null and the log cannot be joined to the trace (TC-NFR-09-1).
+            middleware_position=0,
         )
         PsycopgInstrumentor().instrument(tracer_provider=provider)
         RedisInstrumentor().instrument(tracer_provider=provider)

@@ -155,6 +155,25 @@ def _add_request_context(
 
 _installed_handlers: list[logging.Handler] = []
 
+# Loggers a host server configures for itself before the application is imported.
+_HOST_LOGGERS = ("gunicorn.error", "gunicorn.access")
+
+
+def _route_host_loggers() -> None:
+    """Route the host server's loggers through the same JSON pipeline (docs/03 7.3).
+
+    Gunicorn attaches its own handler to ``gunicorn.error`` and stops propagation, so without
+    this its lines would stay plain text next to the application's JSON. Only loggers the host
+    has already configured are touched, and they are left alone in a plain Django process.
+    """
+    for name in _HOST_LOGGERS:
+        host_logger = logging.getLogger(name)
+        if not host_logger.handlers:
+            continue
+        for handler in list(host_logger.handlers):
+            host_logger.removeHandler(handler)
+        host_logger.propagate = True
+
 
 def configure_logging(*, service: str, level: str = "INFO") -> None:
     """Configure JSON logging for the process: structlog plus a stdlib root handler.
@@ -202,3 +221,5 @@ def configure_logging(*, service: str, level: str = "INFO") -> None:
     root.addHandler(handler)
     root.setLevel(level)
     _installed_handlers.append(handler)
+
+    _route_host_loggers()
