@@ -47,4 +47,6 @@ def test_models_are_unmanaged():
     # A managed model would let Django write the schema, and the schema is the authority.
     for model in IDENTITY_MODELS:
         assert model._meta.managed is False, model.__name__
-        assert model._meta.db_table.startswith("hub."), model.__name__
+        # Django quotes `db_table` as one identifier, so `hub.users` would address a table by
+        # that literal name; the role's search_path resolves a bare table instead (D-43).
+        assert "." not in model._meta.db_table, model.__name__

@@ -12,6 +12,12 @@ Two shapes need a note:
   key and the repositories always address a row by the whole pair.
 * foreign keys that cross a module boundary (``customers``, ``sites``) are plain uuid columns:
   ``identity`` may not import another module's models (docs/03 section 0).
+
+``db_table`` is a bare table name, never ``hub.users``: Django quotes its argument as one
+identifier, so a dotted name would address a table literally called "hub.users". The schema
+is resolved by the connection's ``search_path``, which ``db/schema.sql`` sets as a role
+setting on every application role (``hub_api``, ``hub_worker``, ``ai_gateway``, ...) and which
+the test alias has to mirror (D-43).
 """
 
 from __future__ import annotations
@@ -75,7 +81,7 @@ class User(UnmanagedShim):
     class Meta:
         managed = False
         app_label = "identity"
-        db_table = "hub.users"
+        db_table = "users"
 
 
 class Role(UnmanagedShim):
@@ -85,7 +91,7 @@ class Role(UnmanagedShim):
     class Meta:
         managed = False
         app_label = "identity"
-        db_table = "hub.roles"
+        db_table = "roles"
 
 
 class Permission(UnmanagedShim):
@@ -95,7 +101,7 @@ class Permission(UnmanagedShim):
     class Meta:
         managed = False
         app_label = "identity"
-        db_table = "hub.permissions"
+        db_table = "permissions"
 
 
 class RolePermission(UnmanagedShim):
@@ -105,7 +111,7 @@ class RolePermission(UnmanagedShim):
     class Meta:
         managed = False
         app_label = "identity"
-        db_table = "hub.role_permissions"
+        db_table = "role_permissions"
 
 
 class UserRole(UnmanagedShim):
@@ -117,7 +123,7 @@ class UserRole(UnmanagedShim):
     class Meta:
         managed = False
         app_label = "identity"
-        db_table = "hub.user_roles"
+        db_table = "user_roles"
 
 
 class UserSite(UnmanagedShim):
@@ -127,7 +133,7 @@ class UserSite(UnmanagedShim):
     class Meta:
         managed = False
         app_label = "identity"
-        db_table = "hub.user_sites"
+        db_table = "user_sites"
 
 
 class RefreshToken(UnmanagedShim):
@@ -149,7 +155,7 @@ class RefreshToken(UnmanagedShim):
     class Meta:
         managed = False
         app_label = "identity"
-        db_table = "hub.refresh_tokens"
+        db_table = "refresh_tokens"
 
 
 class CustomerOtp(UnmanagedShim):
@@ -169,7 +175,7 @@ class CustomerOtp(UnmanagedShim):
     class Meta:
         managed = False
         app_label = "identity"
-        db_table = "hub.customer_otp"
+        db_table = "customer_otp"
 
 
 class MfaRecoveryCode(UnmanagedShim):
@@ -182,7 +188,7 @@ class MfaRecoveryCode(UnmanagedShim):
     class Meta:
         managed = False
         app_label = "identity"
-        db_table = "hub.mfa_recovery_codes"
+        db_table = "mfa_recovery_codes"
 
 
 class WebauthnCredential(UnmanagedShim):
@@ -199,7 +205,7 @@ class WebauthnCredential(UnmanagedShim):
     class Meta:
         managed = False
         app_label = "identity"
-        db_table = "hub.webauthn_credentials"
+        db_table = "webauthn_credentials"
 
 
 class Approval(UnmanagedShim):
@@ -223,7 +229,7 @@ class Approval(UnmanagedShim):
     class Meta:
         managed = False
         app_label = "identity"
-        db_table = "hub.approvals"
+        db_table = "approvals"
 
 
 class StaffCustomerLink(UnmanagedShim):
@@ -237,7 +243,7 @@ class StaffCustomerLink(UnmanagedShim):
     class Meta:
         managed = False
         app_label = "identity"
-        db_table = "hub.staff_customer_link"
+        db_table = "staff_customer_link"
 
 
 class AuditLogRow(UnmanagedShim):
@@ -261,4 +267,4 @@ class AuditLogRow(UnmanagedShim):
     class Meta:
         managed = False
         app_label = "identity"
-        db_table = "hub.audit_log"
+        db_table = "audit_log"

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,6 +31,10 @@ from hub.settings.base import build_database
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_SQL = REPO_ROOT / "db" / "schema.sql"
+
+# `tests/support` is importable as `support.*` from every test module: the helpers there are
+# shared, and a settings string (an authentication class) has to be importable by dotted path.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 POSTGRES_IMAGE = "postgres:16"
 REDIS_IMAGE = "redis:7-alpine"
 
@@ -129,6 +134,10 @@ def django_db_setup(postgres_url: str) -> Iterator[None]:
     """
     os.environ["HUB_TEST_DB_URL"] = postgres_url
     database = build_database("HUB_TEST_DB_URL", app_name="hub-test")
+    # `db/schema.sql` gives every application role `search_path = hub, pg_catalog` (D-43) and
+    # the models name bare tables, so the test alias emulates the role setting instead of
+    # qualifying names in the models. Production reads it from the role, never from code.
+    database["OPTIONS"] = {**database["OPTIONS"], "options": "-c search_path=hub,pg_catalog"}
     # The alias dict is mutated in place, never replaced: ``connections`` keeps the dict
     # object it first read (Django lists DATABASES as a complex override, and a replaced
     # dict would leave the handler pointing at the old one).
