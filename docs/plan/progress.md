@@ -19,7 +19,7 @@ of the slice.
 | 00.8 | SQL baseline migration mechanism (`hubdb`) | done | `da2649c` | `cd backend && python -m pytest tests/integration/hubdb -q -m integration` -> `7 passed` (baseline byte copy, pairing rules incl. three negative trees, migrate-from-empty, catalog fingerprint equality, invariants on the migrated database, single-statement RunSQL); `pytest tests/integration -q -m integration` -> `31 passed`; `pytest tests/unit tests/architecture -q` -> `85 passed`; root `pytest tests -q` -> `36 passed`; ruff, ruff format, mypy strict clean; checker exit 0; `makemigrations --check` -> no changes |
 | 00.9 | Import-linter contracts and architecture tests | done | `e3122fe` | `cd backend && python -m pytest tests/architecture/test_importlinter.py -q` -> `11 passed` (skeleton clean, seven planted violations each caught, AST admin ban, generator current, module list matches packages); `make lint` -> exit 0 with `Contracts: 119 kept, 0 broken`; `pytest tests/unit tests/architecture -q` -> `96 passed`; `pytest tests/integration -q -m integration` -> `31 passed`; root `pytest tests -q` -> `36 passed` |
 | 00.10 | Images, compose stack, PgBouncer, HAProxy, stubs | done | `ab0fb82` | `python -m pytest tests/test_infra_skeleton.py -q` -> `6 passed` (five pools and routing order, log format without `%HU`/`%HQ`/`%r`, compose service and security matrix, one role URL per deployable, stub placeholders, PgBouncer transaction mode); `make up` -> 14 containers healthy, `migrate` and `db-logins` `Exited (0)`; `python -m pytest tests/test_stack_up.py -q -m integration` -> `1 passed`; `make lint` -> exit 0; root `pytest tests -q` -> `40 passed, 1 deselected` |
-| 00.11 | CI pipeline, security scans, verify script | not started | — | `python -m pytest tests/test_infra_skeleton.py -q` |
+| 00.11 | CI pipeline, security scans, verify script | done | `f027004` (contract fix `b33070f`) | `python -m pytest tests/test_infra_skeleton.py -q` -> `8 passed` (2 new: required jobs, SHA pins and read-only token, oasdiff behind a tag condition, frontend guarded by `hashFiles`, security scanners, verify plan in order); `actionlint 1.7.12 .github/workflows/ci.yml` -> exit 0; `gitleaks 8.30.1 detect --config .gitleaks.toml` -> `no leaks found` (17 commits); `npx @stoplight/spectral-cli@6 lint api/openapi.yaml` -> `0 errors, 118 warnings`, exit 0; root `python -m pytest tests -q` -> `42 passed, 1 deselected`; `make lint` -> exit 0 |
 | 00.12 | End-to-end verification, demo and evidence | not started | — | `make up && python -m pytest tests/test_stack_up.py -q -m integration` |
 
 ## Assumptions
@@ -172,6 +172,45 @@ of the slice.
 - **00.10 Prometheus has a scrape file but no server**: the plan adds the Prometheus, Tempo,
   Loki and Grafana services with the dashboards (plan note 10), so `prometheus.yml` is the
   contract that slice mounts and the collector keeps the `debug` exporter in the meantime.
+
+- **00.11 spectral needs a ruleset file**: the CLI does not default to the OpenAPI ruleset —
+  without a `.spectral.yaml` it exits with "No ruleset has been found", and `--ruleset
+  spectral:oas` is read as a path. A two-line `.spectral.yaml` (`extends: [spectral:oas]`) is
+  the documented way, so the gate is `spectral lint api/openapi.yaml` exactly as the plan
+  words it.
+- **00.11 the OpenAPI gate found four real contract defects** (commit `b33070f`): the media
+  examples of staff login, MFA verify, customer OTP request and the telemetry batch were the
+  bare payload while their schema requires `{data: ...}`. Fixed in the specification rather
+  than by lowering the rule: an example that contradicts its own schema is what a consumer
+  copies. The document still reports 118 warnings (`operation-description`, unused
+  components), which spectral does not fail on.
+- **00.11 a seventh job: `stack`**: TC-NFR-14-1 needs "one command brings a clean clone to a
+  healthy environment" proved, and docs/09 section 6 says the CI carries it; the job runs
+  `make up` and `tests/test_stack_up.py` on the runner's Docker, dumping the stack's state and
+  logs when it fails. It is independent of `images` (both build the same image, in parallel).
+- **00.11 a skip fails the verification**: `verify_slice.sh` fails when a suite reports
+  `N skipped`, because docs/10 section 3 forbids a green run built on skipped requirements —
+  the integration suite must reach real Postgres and Redis. This is enforced by the script's
+  runner, not by an extra command, so `--print` stays the plan's own list.
+- **00.11 step 8 is two commands**: `make up` then the stack test, so a failing `make up` is
+  reported on its own line instead of inside one long `&&` chain.
+- **00.11 gitleaks allowlist**: `.gitleaks.toml` extends the default ruleset and allowlists
+  four paths, each documented in the file — `.env.example` (throwaway `dev` values),
+  `api/openapi.yaml` and `docs/` (fabricated examples that match the entropy and JWT rules by
+  design) and `tests/` (the literals the redaction tests prove are masked). History is
+  scanned whole; nothing was excluded by commit.
+- **00.11 the frontend guard is per step, not per job**: a job-level `if` is evaluated before
+  the checkout step, so `hashFiles('frontend/package.json')` is always empty there and the
+  job would never run even after slice fe-00 lands. Every npm step carries the condition
+  instead, with one step saying why the job did nothing.
+- **00.11 action SHAs were taken from the GitHub API** on 2026-10-25 (checkout `v7.0.1`,
+  setup-python and setup-node `v7.1.0`, setup-uv `v10.3.2`, buildx `v4.4.1`, build-push
+  `v7.4.0`, trivy-action `v0.36.0`), and each line keeps its tag as a comment. Renovate
+  proposes the next pin.
+- **00.11 oasdiff and gitleaks are release binaries, not actions**: `gitleaks/gitleaks-action`
+  needs a licence for organisations and `oasdiff` publishes no action, so both are downloaded
+  from a pinned release tag into `$RUNNER_TEMP` and run directly, with no `curl | sh` step.
+  The oasdiff comparison is skipped until a `v*` tag exists, as the task requires.
 
 ## Open change requests
 
