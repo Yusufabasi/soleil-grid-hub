@@ -10,21 +10,24 @@ discarded with the savepoint.
 The principal is set with ``set_config(..., true)``: transaction-local, which is what makes
 it safe under PgBouncer's transaction pooling (docs/04 10.9). A second statement on the same
 pooled server connection cannot see the previous request's identity.
+
+The contract lives in ``hub.shared.contracts`` and is re-exported here: a use case depends on
+the Protocol, never on this Django adapter, and the import-linter contract on the application
+layer counts indirect imports.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Sequence
-from contextlib import AbstractContextManager, contextmanager
-from dataclasses import dataclass
+from contextlib import contextmanager
 from types import TracebackType
-from typing import Any, Protocol
-from uuid import UUID
+from typing import Any
 
 from django.db import connections, transaction
 from django.db.transaction import Atomic
 from psycopg.types.json import Jsonb
 
+from hub.shared.contracts import OutboxWriter, PrincipalContext, UnitOfWork
 from hub.shared.events import DomainEvent
 
 __all__ = [
@@ -33,41 +36,6 @@ __all__ = [
     "PrincipalContext",
     "UnitOfWork",
 ]
-
-
-@dataclass(frozen=True)
-class PrincipalContext:
-    """Who the transaction acts for: a staff user, a customer, or neither (system work)."""
-
-    user_id: UUID | None = None
-    customer_id: UUID | None = None
-
-
-class OutboxWriter(Protocol):
-    """Stages an event in the caller's transaction (docs/03 2.1)."""
-
-    def add(self, event: DomainEvent) -> None: ...
-
-
-class UnitOfWork(Protocol):
-    """The transactional boundary of one use case (docs/03 2.1)."""
-
-    outbox: OutboxWriter
-
-    def __enter__(self) -> UnitOfWork: ...
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None: ...
-
-    def savepoint(self) -> AbstractContextManager[None]: ...
-
-    def require_active(self) -> None: ...
-
-    def on_commit(self, fn: Callable[[], None]) -> None: ...
 
 
 class _Outbox:
