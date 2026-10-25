@@ -13,7 +13,12 @@ VENV := $(CURDIR)/backend/.venv
 TOOLS := $(CURDIR)/.tools/venv
 export PATH := $(VENV)/bin:$(TOOLS)/bin:$(PATH)
 
-COMPOSE := docker compose -f infra/docker/compose.yaml
+# The stack's variables come from .env; compose looks for that file next to the compose file,
+# not in the repository root, so it is passed explicitly (and only once it exists).
+ENV_FILE := $(if $(wildcard .env),--env-file .env,)
+COMPOSE := docker compose $(ENV_FILE) -f infra/docker/compose.yaml
+# `make up WEB=real` mounts the override that builds frontend/ instead of the nginx stub.
+COMPOSE_WEB := $(if $(filter real,$(WEB)),-f infra/docker/compose.web.yaml,)
 
 .PHONY: help env venv up down reset test lint contracts gen verify
 
@@ -21,6 +26,8 @@ help:
 	@echo "make env      copy .env.example to .env when absent"
 	@echo "make venv     create backend/.venv from backend/uv.lock"
 	@echo "make up       start the local stack (compose, migrate, logins)"
+	@echo "              WEB=real builds frontend/ instead of the hub-web stub"
+	@echo "              SCALE_WEBHOOKS=2 runs two webhook replicas"
 	@echo "make down     stop the local stack"
 	@echo "make reset    stop the local stack and delete its volumes"
 	@echo "make test     backend unit and architecture tests (+ frontend unit tests)"
@@ -45,8 +52,12 @@ backend/uv.lock: backend/pyproject.toml | $(TOOLS)/bin/uv
 	@$(TOOLS)/bin/uv lock --project backend --quiet
 
 up: env
+	@if [ "$(WEB)" = "real" ] && [ ! -d frontend ]; then \
+		echo "WEB=real needs frontend/ (fe-00); the nginx stub is the default" >&2; exit 1; \
+	fi
 	@bash tools/scripts/gen_dev_userlist.sh
-	$(COMPOSE) up -d --wait
+	$(COMPOSE) $(COMPOSE_WEB) up -d --build --wait \
+		$(if $(SCALE_WEBHOOKS),--scale hub-ingest-webhooks=$(SCALE_WEBHOOKS),)
 
 down:
 	$(COMPOSE) down

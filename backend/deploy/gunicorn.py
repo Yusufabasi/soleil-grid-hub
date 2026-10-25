@@ -36,6 +36,12 @@ loglevel = os.environ.get("GUNICORN_LOG_LEVEL", "info")
 # Never buffer request data in the arbiter, and let the OS refuse stale connections quickly.
 forwarded_allow_ips = os.environ.get("GUNICORN_FORWARDED_ALLOW_IPS", "127.0.0.1")
 
+# Gunicorn 26 opens a control socket at $HOME/.gunicorn/gunicorn.ctl by default, which fails on
+# the read-only image root (and an operator cannot reach it in a container anyway). Draining is
+# driven by SIGTERM through entrypoint-drain.sh, so the socket is disabled, not relocated.
+# The setting requires gunicorn >= 26; uv.lock pins it.
+control_socket_disable = True
+
 
 def when_ready(server: object) -> None:
     """Start the internal metrics port once per pod (docs/09 section 5)."""

@@ -1,0 +1,43 @@
+# Local OpenTelemetry collector (docs/09 5.4).
+#
+# Slice 00 keeps the pipeline visible instead of stored: spans and logs go to the `debug`
+# exporter, so `docker compose logs otel-collector` shows the span for a request and proves the
+# balancer's `traceparent` continues into the application (Demo step 6). Tempo, Loki and
+# Grafana -- and therefore the tail_sampling and batch tuning that only pays off with a
+# backend -- arrive with the observability slice (plan note 10).
+#
+# Metrics do not travel through here: Prometheus scrapes the application's internal port 9102
+# directly (infra/observability/prometheus.yml).
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 1s
+    send_batch_size: 512
+
+exporters:
+  debug:
+    verbosity: detailed
+
+service:
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      level: none
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]

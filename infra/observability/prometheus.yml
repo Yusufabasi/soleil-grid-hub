@@ -1,0 +1,41 @@
+# Prometheus scrape configuration (docs/09 5.3, 6.3).
+#
+# The application serves its registry on the internal port 9102 and never through a Django
+# route, so the edge never exposes it (plan note 9). One target per Python process type:
+# gunicorn's `when_ready`, the ASGI entrypoint and the worker commands each open the port.
+#
+# The Prometheus server itself arrives with the dashboards and burn-rate alerts of the
+# observability slice; this file is the scrape contract it mounts.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: local
+
+scrape_configs:
+  - job_name: hub-app
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["hub-api:9102"]
+        labels: {service: hub-api}
+      - targets: ["hub-ingest-webhooks:9102"]
+        labels: {service: hub-ingest}
+      - targets: ["hub-ingest-telemetry:9102"]
+        labels: {service: hub-ingest}
+      - targets: ["hub-stream:9102"]
+        labels: {service: hub-stream}
+      - targets: ["hub-worker:9102"]
+        labels: {service: hub-worker}
+      - targets: ["hub-relay:9102"]
+        labels: {service: hub-worker}
+      - targets: ["hub-scheduler:9102"]
+        labels: {service: hub-worker}
+
+  # The balancer's own exporter: connection counts and per-pool queueing, which the RED
+  # alerts of docs/09 6.3 need to tell "the app is slow" from "the pool is short of slots".
+  - job_name: haproxy
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["lb:8404"]
+        labels: {service: haproxy}

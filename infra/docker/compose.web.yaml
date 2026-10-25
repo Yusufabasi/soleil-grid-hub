@@ -1,0 +1,22 @@
+# Real frontend override: `make up WEB=real` (the default is the nginx stub of
+# infra/docker/hub-web-stub, so slice 00 needs no Node toolchain).
+#
+# The image is built from frontend/ per docs/plan/frontend/fe-00-shell.md, which ships the
+# Next.js standalone server on port 3000 and the `/web/health` route the balancer checks. The
+# stub's config mount is cleared here (`!reset`) instead of being inherited.
+#
+#   docker compose --env-file .env -f infra/docker/compose.yaml \
+#       -f infra/docker/compose.web.yaml up -d --wait
+
+services:
+  hub-web:
+    image: soleil/hub-web:${TAG:-dev}
+    build:
+      context: ../../frontend
+      dockerfile: Dockerfile
+    volumes: !reset []
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/web/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
