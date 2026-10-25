@@ -30,11 +30,15 @@ from hub.identity.api.serializers import (
     MfaEnrollConfirmInput,
     MfaEnrollInput,
     MfaVerifyInput,
+    WebAuthnAssertionInput,
+    WebAuthnAssertionOptionsInput,
+    WebAuthnRegistrationInput,
     token_pair_document,
 )
 from hub.identity.contracts import Principal
 from hub.shared.api.permissions import PermissionsYamlPermission, operation
 from hub.shared.errors import Unauthenticated
+from hub.shared.security import digest_token
 
 __all__ = [
     "ConfirmMfaEnrollmentView",
@@ -42,6 +46,10 @@ __all__ = [
     "StaffLoginView",
     "StaffMfaVerifyView",
     "StartMfaEnrollmentView",
+    "VerifyWebauthnAssertionView",
+    "WebauthnAssertionOptionsView",
+    "WebauthnRegistrationOptionsView",
+    "RegisterWebauthnCredentialView",
 ]
 
 
@@ -202,6 +210,117 @@ class ConfirmMfaEnrollmentView(APIView):
             refresh_token=authenticated.token,
             refresh_expires_in=authenticated.expires_in,
         )
+
+
+class WebauthnRegistrationOptionsView(APIView):
+    """`webauthnRegistrationOptions`: a creation challenge for the signed-in user."""
+
+    permission_classes = [PermissionsYamlPermission]
+
+    @operation("webauthnRegistrationOptions")
+    def post(self, request: Request) -> Response:
+        principal = _principal(request)
+        challenge = wiring.webauthn().registration_options(principal.subject_id)
+        return Response(
+            {
+                "data": {
+                    "options": challenge.options,
+                    "challenge_id": str(challenge.challenge_id),
+                }
+            }
+        )
+
+
+class RegisterWebauthnCredentialView(APIView):
+    """`registerWebauthnCredential`: verify the attestation and store the public key."""
+
+    permission_classes = [PermissionsYamlPermission]
+
+    @operation("registerWebauthnCredential")
+    def post(self, request: Request) -> Response:
+        principal = _principal(request)
+        payload = WebAuthnRegistrationInput(data=request.data)
+        payload.is_valid(raise_exception=True)
+        credential = wiring.webauthn().register(
+            principal.subject_id,
+            payload.validated_data["challenge_id"],
+            dict(payload.validated_data["credential"]),
+            name=str(payload.validated_data.get("name") or "security key"),
+        )
+        return Response({"data": credential.document()}, status=201)
+
+
+class WebauthnAssertionOptionsView(APIView):
+    """`webauthnAssertionOptions`: a request challenge for the account in the mfa token."""
+
+    permission_classes = [PermissionsYamlPermission]
+    authentication_classes: list[Any] = []
+
+    @operation("webauthnAssertionOptions")
+    def post(self, request: Request) -> Response:
+        payload = WebAuthnAssertionOptionsInput(data=request.data)
+        payload.is_valid(raise_exception=True)
+        challenge = wiring.webauthn().assertion_options(str(payload.validated_data["mfa_token"]))
+        return Response(
+            {
+                "data": {
+                    "options": challenge.options,
+                    "challenge_id": str(challenge.challenge_id),
+                }
+            }
+        )
+
+
+class VerifyWebauthnAssertionView(APIView):
+    """`verifyWebauthnAssertion`: a valid assertion opens the session."""
+
+    permission_classes = [PermissionsYamlPermission]
+    authentication_classes: list[Any] = []
+
+    @operation("verifyWebauthnAssertion")
+    def post(self, request: Request) -> Response:
+        payload = WebAuthnAssertionInput(data=request.data)
+        payload.is_valid(raise_exception=True)
+        user_id = wiring.webauthn().assert_(
+            str(payload.validated_data["mfa_token"]),
+            payload.validated_data["challenge_id"],
+            dict(payload.validated_data["credential"]),
+        )
+        now = wiring.clock().now()
+        issued = wiring.sessions().issue(
+            user_id=user_id,
+            customer_id=None,
+            auth_time=now,
+            acr="phr",
+            ip=_ip(request),
+            user_agent=_ua(request),
+        )
+        wiring.store().delete(
+            f"mfa_challenge:{_challenge_digest(str(payload.validated_data['mfa_token']))}"
+        )
+        wiring.audit_log().record(
+            stream="auth",
+            actor=None,
+            action="auth.login",
+            entity_type="user",
+            entity_id=user_id,
+            site_id=None,
+            details={"method": "webauthn"},
+            ip=_ip(request),
+        )
+        return _token_pair_response(
+            request,
+            user_id=user_id,
+            session_id=issued.session_id,
+            auth_time=now,
+            acr="phr",
+            refresh_token=issued.token,
+            refresh_expires_in=issued.expires_in,
+        )
+
+
+def _challenge_digest(mfa_token: str) -> str:
+    return digest_token(mfa_token).hex()
 
 
 class RegenerateRecoveryCodesView(APIView):

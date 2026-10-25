@@ -8,6 +8,7 @@ with a frozen clock so the thirty-second step can be moved exactly one and two s
 
 from __future__ import annotations
 
+import statistics
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -92,8 +93,13 @@ def test_wrong_password_and_unknown_email_identical(client: Client, clock: Froze
         return response, time.perf_counter() - started
 
     timed("warmup@example.test")  # the first request pays Django's lazy imports
-    wrong = [timed(user.email) for _ in range(3)]
-    unknown = [timed("nobody@example.test") for _ in range(3)]
+    # Samples are interleaved and compared by median: one request that loses the CPU to a
+    # neighbouring test must not be able to decide a test about timing.
+    wrong: list[tuple[Any, float]] = []
+    unknown: list[tuple[Any, float]] = []
+    for _ in range(4):
+        wrong.append(timed(user.email))
+        unknown.append(timed("nobody@example.test"))
 
     assert all(response.status_code == 401 for response, _ in wrong + unknown)
     assert {response.json()["code"] for response, _ in wrong + unknown} == {"invalid_credentials"}
@@ -102,9 +108,9 @@ def test_wrong_password_and_unknown_email_identical(client: Client, clock: Froze
 
     # Both paid a full Argon2id verification, which dominates either request: the two must be
     # in the same league, or the response is a signal about whether the account exists.
-    mean_wrong = sum(seconds for _, seconds in wrong) / len(wrong)
-    mean_unknown = sum(seconds for _, seconds in unknown) / len(unknown)
-    assert abs(mean_wrong - mean_unknown) < 0.5 * max(mean_wrong, mean_unknown)
+    median_wrong = statistics.median(seconds for _, seconds in wrong)
+    median_unknown = statistics.median(seconds for _, seconds in unknown)
+    assert abs(median_wrong - median_unknown) < 0.5 * max(median_wrong, median_unknown)
 
 
 @pytest.mark.tc("TC-NFR-06-2")

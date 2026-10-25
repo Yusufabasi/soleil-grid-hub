@@ -22,9 +22,12 @@ __all__ = [
     "MfaVerifyInput",
     "OtpRequestInput",
     "OtpVerifyInput",
-    "RefreshInput",
     "LoginInput",
     "MeUpdateInput",
+    "RefreshInput",
+    "WebAuthnAssertionInput",
+    "WebAuthnAssertionOptionsInput",
+    "WebAuthnRegistrationInput",
     "principal_document",
     "token_pair_document",
 ]
@@ -89,6 +92,22 @@ class OtpRequestInput(serializers.Serializer[dict[str, Any]]):
 class OtpVerifyInput(serializers.Serializer[dict[str, Any]]):
     challenge_id = serializers.UUIDField()
     code = serializers.RegexField(r"^[0-9]{6}$")
+
+
+class WebAuthnAssertionOptionsInput(serializers.Serializer[dict[str, Any]]):
+    mfa_token = serializers.CharField(max_length=128)
+
+
+class WebAuthnRegistrationInput(serializers.Serializer[dict[str, Any]]):
+    challenge_id = serializers.UUIDField()
+    credential = serializers.DictField()
+    name = serializers.CharField(max_length=64, required=False, allow_blank=False)
+
+
+class WebAuthnAssertionInput(serializers.Serializer[dict[str, Any]]):
+    mfa_token = serializers.CharField(max_length=128)
+    challenge_id = serializers.UUIDField()
+    credential = serializers.DictField()
 
 
 class MeUpdateInput(serializers.Serializer[dict[str, Any]]):

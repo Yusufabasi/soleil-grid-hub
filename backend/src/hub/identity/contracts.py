@@ -21,6 +21,7 @@ __all__ = [
     "SessionRow",
     "SessionStore",
     "TokenClaims",
+    "WebauthnCredentialRow",
 ]
 
 # The three endings of an audited action (api/openapi.yaml, ``AuditEntry.outcome``).
@@ -117,6 +118,33 @@ class SessionStore(Protocol):
     def revoke_family(self, family_id: UUID, *, at: datetime) -> int: ...
 
     def revoke(self, session_id: UUID, *, at: datetime) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class WebauthnCredentialRow:
+    """One row of ``hub.webauthn_credentials``, as registration and assertion see it."""
+
+    id: UUID
+    credential_id: bytes
+    public_key: bytes
+    sign_count: int
+    transports: tuple[str, ...]
+    name: str
+    created_at: datetime
+    last_used_at: datetime | None
+
+    def document(self) -> dict[str, Any]:
+        """``WebAuthnCredential`` of the contract."""
+        return {
+            "id": str(self.id),
+            "name": self.name,
+            "created_at": self.created_at.isoformat().replace("+00:00", "Z"),
+            "last_used_at": (
+                self.last_used_at.isoformat().replace("+00:00", "Z")
+                if self.last_used_at is not None
+                else None
+            ),
+        }
 
 
 class AuditLog(Protocol):

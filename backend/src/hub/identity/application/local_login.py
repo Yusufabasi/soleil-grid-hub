@@ -29,7 +29,7 @@ import pyotp
 
 from hub.identity.contracts import AuditLog
 from hub.shared.contracts import KeyValueStore
-from hub.shared.errors import RateLimited, Unauthenticated
+from hub.shared.errors import PermissionDenied, RateLimited, Unauthenticated
 from hub.shared.ports import Clock, IdGenerator
 from hub.shared.security import (
     digest_token,
@@ -58,6 +58,8 @@ TOTP_VALID_WINDOW = 1
 TOTP_REPLAY_TTL_SECONDS = 90
 FAILURE_LIMIT = 5
 FAILURE_WINDOW_SECONDS = 900
+# Roles that must present a security key once HUB_WEBAUTHN_ENFORCED is on (docs/05 4).
+WEBAUTHN_ENFORCED_ROLES = frozenset({"finance_officer", "administrator"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,8 +175,19 @@ class LocalLogin:
 
         self._throttle.clear(account_key)
         mfa_token = f"mfa_{secrets.token_urlsafe(18)}"
-        enrollment_required = record.mfa_secret_enc is None
-        methods = self._methods(record, enrollment_required=enrollment_required)
+        has_key = self._users.has_webauthn_credential(record.id)
+        enforced = self._webauthn_enforced and bool(
+            self._users.roles_of(record.id) & WEBAUTHN_ENFORCED_ROLES
+        )
+        # Enrolment is required when there is no TOTP secret yet, and also when a key-only
+        # role holds no key: the challenge must send that user to enrol, not to verify.
+        enrollment_required = record.mfa_secret_enc is None or (enforced and not has_key)
+        methods = self._methods(
+            record,
+            enrollment_required=enrollment_required,
+            enforced=enforced,
+            has_key=has_key,
+        )
         self._store.set(
             _challenge_key(mfa_token),
             json.dumps({"user_id": str(record.id)}),
@@ -197,17 +210,20 @@ class LocalLogin:
             methods=methods,
         )
 
-    def _methods(self, record: Any, *, enrollment_required: bool) -> tuple[str, ...]:
+    def _methods(
+        self, record: Any, *, enrollment_required: bool, enforced: bool, has_key: bool
+    ) -> tuple[str, ...]:
+        if enforced:
+            # These roles may only finish with a security key; without one the challenge says
+            # so, and the enrolment window (allowed to enrol) is how they get one (docs/05 4).
+            return ("webauthn",)
         if enrollment_required:
             return ("totp",)
         methods = ["totp"]
-        if self._users.has_webauthn_credential(record.id):
+        if has_key:
             methods.append("webauthn")
         if self._users.count_unused_recovery_codes(record.id) > 0:
             methods.append("recovery_code")
-        if self._webauthn_enforced and methods == ["totp"]:
-            # The enforced roles must enrol before they can sign in (docs/05 4).
-            return ("totp",)
         return tuple(methods)
 
 
@@ -222,12 +238,14 @@ class MfaService:
         users: Any,
         sessions: Any,
         audit: AuditLog,
+        webauthn_enforced: bool = False,
     ) -> None:
         self._clock = clock
         self._store = store
         self._users = users
         self._sessions = sessions
         self._audit = audit
+        self._webauthn_enforced = webauthn_enforced
 
     def verify(
         self,
@@ -242,6 +260,9 @@ class MfaService:
         record = self._users.get(record_id)
         if record is None or record.status != "active":
             raise Unauthenticated(code="invalid_code")
+        if self._webauthn_enforced and (self._users.roles_of(record.id) & WEBAUTHN_ENFORCED_ROLES):
+            # A TOTP code is not an acceptable answer for these roles once enforcement is on.
+            raise PermissionDenied(code="webauthn_required", message_key="webauthn_required")
 
         if recovery_code:
             self._verify_recovery(record, recovery_code, ip=ip)

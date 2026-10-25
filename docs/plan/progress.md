@@ -32,7 +32,7 @@ of the slice.
 | 01.3 | EdDSA access tokens and bearer authentication | done | see below | `cd backend && python -m pytest tests/unit/identity/test_tokens.py tests/integration/identity/test_bearer.py -q` -> `18 passed` (600 s lifetime and claim set, no roles claim, `alg: none` refused, HS256 key confusion refused, leeway boundary on a frozen clock, edited payload refused, foreign issuer and over-long lifetime refused; live token authenticates, missing/garbage/non-bearer 401, stale `tv` 401 `token_revoked` with a warm and a cold cache, suspended and soft-deleted users refused, authority read from the database after a grant); `pytest -q` -> `171 passed`; `make lint` -> exit 0 (ruff, format, mypy strict 183 files, import-linter 119 kept, Django config checks) |
 | 01.4 | Refresh sessions, cookie views and CSRF guard | done | see below | `cd backend && python -m pytest tests/integration/identity/test_refresh.py tests/integration/identity/test_csrf.py -q` -> `22 passed` (exact cookie attributes and no refresh token in JSON, rotation, replay one second later revokes the family, idle boundary at 1799/1800+ and absolute at the eighth hour, body transport only with the header, logout revokes and clears, refreshed principal keeps the login `auth_time`, a grant appears in the refreshed principal; four CSRF failures x two endpoints, a cookie alone does not authenticate a bearer operation); `pytest -q` -> `193 passed`; `make lint` -> exit 0 |
 | 01.5 | Local break-glass login, TOTP, recovery codes | done | see below | `cd backend && python -m pytest tests/integration/identity/test_local_login.py -q` -> `11 passed` (wrong password and unknown address identical in status, code, detail and time; fifth failure closes the window with `Retry-After`, right password included; login never returns a token; verify returns a token pair and a cookie; TOTP replay refused; one step of drift accepted, two refused; recovery code single use and case/space insensitive; regeneration returns ten and deletes the old set; enrolment stores an encrypted secret and ten codes and signs in); `pytest -q` -> `204 passed`; `make lint` -> exit 0 |
-| 01.6 | WebAuthn registration, assertion, enforcement | not started | — | — |
+| 01.6 | WebAuthn registration, assertion, enforcement | done | see below | `cd backend && python -m pytest tests/integration/identity/test_webauthn.py -q` -> `7 passed` (a real P-256 key registers and the next login asserts into a token pair; a challenge is single use; an assertion without the user-verification bit is refused; a rewound `sign_count` is refused; registration needs a bearer; with `HUB_WEBAUTHN_ENFORCED` a finance officer's TOTP is 403 `webauthn_required` and the challenge offers `["webauthn"]` with `enrollment_required: true` while a support agent still signs in with TOTP); `pytest -q` -> `211 passed`; `make lint` -> exit 0 (ruff, format, mypy strict 168 files, import-linter, Django config checks) |
 | 01.7 | OIDC code exchange in hub-api | not started | — | — |
 | 01.8 | Step-up, `/me`, locale in the principal | not started | — | — |
 | 01.9 | ApprovalService, executor registry, conflict check | not started | — | — |
@@ -155,6 +155,19 @@ of the slice.
 - **01.5 `wiring.use_clock` is a test seam**: idle limits, the absolute limit and the step-up
   boundary are seconds apart, so proving them needs a frozen clock rather than a sleeping
   test. It resets the adapters that captured the previous clock and is documented as such.
+- **01.6 an ES256 assertion is signed in ASN.1 DER**: `webauthn` 3.0.1 hands the signature
+  straight to `cryptography`'s ECDSA primitive, which takes DER, and CTAP2 authenticators
+  return exactly that (raw `r || s` is the internal CTAP message form, not the RP one). The
+  software authenticator therefore sends the DER signature its key produced; the first draft
+  sent raw halves and the server correctly refused it.
+- **01.6 `enrollment_required` covers a key-only role without a key**: for a role in
+  `WEBAUTHN_ENFORCED_ROLES` the challenge can only offer `webauthn`, so a user who holds no
+  credential would have nothing to answer. The flag is now true for that case as well as for
+  a missing TOTP secret, which is what sends them to the enrolment window.
+- **01.6 the challenge store is Redis, keyed by an opaque id**: the browser gets a
+  `challenge_id` and the bytes stay server-side for 300 seconds, so a replayed or forged
+  challenge has nothing to match. `_consume` pops before checking and binds purpose and user
+  id, which makes a challenge from another flow useless.
 - **01.1 tests beyond the plan's three**: the plan names the completeness test, the
   role-denial test and the undeclared-view test. Two more pin the other two outcomes of the
   same class (the listed role is allowed, no principal is 401), so the 401/403/200 triangle is

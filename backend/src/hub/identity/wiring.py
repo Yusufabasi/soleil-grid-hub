@@ -13,6 +13,7 @@ generator are too. Tests that need a different clock or store call :func:`reset`
 from __future__ import annotations
 
 import threading
+from urllib.parse import urlsplit
 
 from django.conf import settings
 
@@ -24,6 +25,7 @@ from hub.identity.application.local_login import (
 )
 from hub.identity.application.sessions import SessionLimits, SessionService
 from hub.identity.application.tokens import AccessTokenService
+from hub.identity.application.webauthn import WebauthnService
 from hub.identity.contracts import AuditLog, Principal
 from hub.identity.infrastructure.audit import HubAuditLog
 from hub.identity.infrastructure.repositories import SessionRepository, UserRepository
@@ -47,6 +49,7 @@ __all__ = [
     "tokens",
     "unit_of_work",
     "users",
+    "webauthn",
 ]
 
 _lock = threading.RLock()
@@ -60,15 +63,16 @@ _audit_log: AuditLog | None = None
 _local_login: LocalLogin | None = None
 _mfa: MfaService | None = None
 _enrollment: EnrollmentService | None = None
+_webauthn: WebauthnService | None = None
 
 
 def reset() -> None:
     """Drop every cached adapter; tests use it after changing a setting."""
     global _clock, _ids, _store, _tokens, _users, _sessions, _audit_log  # noqa: PLW0603
-    global _local_login, _mfa, _enrollment  # noqa: PLW0603
+    global _local_login, _mfa, _enrollment, _webauthn  # noqa: PLW0603
     with _lock:
         _clock = _ids = _store = _tokens = _users = _sessions = _audit_log = None
-        _local_login = _mfa = _enrollment = None
+        _local_login = _mfa = _enrollment = _webauthn = None
 
 
 def use_clock(clock: Clock) -> None:
@@ -201,6 +205,7 @@ def mfa() -> MfaService:
                     users=users(),
                     sessions=sessions(),
                     audit=audit_log(),
+                    webauthn_enforced=bool(settings.HUB_WEBAUTHN_ENFORCED),
                 )
     return _mfa
 
@@ -213,6 +218,25 @@ def enrollment() -> EnrollmentService:
             if _enrollment is None:
                 _enrollment = EnrollmentService(clock=clock(), store=store(), users=users())
     return _enrollment
+
+
+def webauthn() -> WebauthnService:
+    """WebAuthn registration and assertion, relying on this site's origin."""
+    global _webauthn  # noqa: PLW0603
+    if _webauthn is None:
+        with _lock:
+            if _webauthn is None:
+                origin = str(settings.SITE_ORIGIN)
+                _webauthn = WebauthnService(
+                    clock=clock(),
+                    ids=ids(),
+                    store=store(),
+                    users=users(),
+                    rp_id=urlsplit(origin).hostname or "localhost",
+                    rp_name=str(settings.HUB_WEBAUTHN_RP_NAME),
+                    origin=origin,
+                )
+    return _webauthn
 
 
 def audit_log() -> AuditLog:

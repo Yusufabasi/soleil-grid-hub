@@ -20,7 +20,7 @@ from uuid import UUID
 
 from django.db import connection
 
-from hub.identity.contracts import SessionRow, TokenClaims
+from hub.identity.contracts import SessionRow, TokenClaims, WebauthnCredentialRow
 from hub.identity.domain.principal import Locale, Principal
 from hub.identity.infrastructure.crypto import decrypt_secret, encrypt_secret
 from hub.shared.contracts import KeyValueStore
@@ -181,6 +181,68 @@ class UserRepository:
             raise Unauthenticated()
         self._store.delete(self._version_key(user_id))
         return int(row[0])
+
+    def webauthn_credentials(self, user_id: UUID) -> list[WebauthnCredentialRow]:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT id, credential_id, public_key, sign_count, transports, name, created_at, "
+                "last_used_at FROM hub.webauthn_credentials WHERE user_id = %s ORDER BY created_at",
+                [user_id],
+            )
+            return [_credential(row) for row in cursor.fetchall()]
+
+    def find_webauthn_credential(self, credential_id: bytes) -> WebauthnCredentialRow | None:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT id, credential_id, public_key, sign_count, transports, name, created_at, "
+                "last_used_at FROM hub.webauthn_credentials WHERE credential_id = %s",
+                [credential_id],
+            )
+            row = cursor.fetchone()
+        return _credential(row) if row is not None else None
+
+    def insert_webauthn_credential(
+        self,
+        user_id: UUID,
+        *,
+        credential_id: bytes,
+        public_key: bytes,
+        sign_count: int,
+        transports: list[str],
+        name: str,
+        at: datetime,
+    ) -> WebauthnCredentialRow:
+        credential_row_id = uuid7()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO hub.webauthn_credentials "
+                "(id, user_id, credential_id, public_key, sign_count, transports, name, created_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id, credential_id, public_key, "
+                "sign_count, transports, name, created_at, last_used_at",
+                [
+                    credential_row_id,
+                    user_id,
+                    credential_id,
+                    public_key,
+                    sign_count,
+                    transports,
+                    name,
+                    at,
+                ],
+            )
+            row = cursor.fetchone()
+        if row is None:  # pragma: no cover - RETURNING always answers on a successful insert
+            raise RuntimeError("webauthn credential insert returned no row")
+        return _credential(row)
+
+    def touch_webauthn_credential(
+        self, credential_row_id: UUID, *, sign_count: int, at: datetime
+    ) -> None:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE hub.webauthn_credentials SET sign_count = %s, last_used_at = %s WHERE id = %s",
+                [sign_count, at, credential_row_id],
+            )
 
     def has_webauthn_credential(self, user_id: UUID) -> bool:
         with connection.cursor() as cursor:
@@ -345,6 +407,21 @@ _SESSION_SELECT = (
     "SELECT id, user_id, customer_id, family_id, issued_at, expires_at, rotated_at, revoked_at "
     "FROM hub.refresh_tokens"
 )
+
+
+def _credential(row: Any) -> WebauthnCredentialRow:
+    values = tuple(row)
+    transports = values[4] if isinstance(values[4], list) else list(values[4] or ())
+    return WebauthnCredentialRow(
+        id=cast("UUID", values[0]),
+        credential_id=bytes(values[1]),
+        public_key=bytes(values[2]),
+        sign_count=int(values[3]),
+        transports=tuple(str(item) for item in transports),
+        name=str(values[5]),
+        created_at=cast("datetime", values[6]),
+        last_used_at=cast("datetime | None", values[7]),
+    )
 
 
 def _session(row: Any) -> SessionRow:

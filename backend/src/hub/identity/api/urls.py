@@ -12,9 +12,13 @@ from hub.identity.api.cookie_views import logout_view, refresh_view
 from hub.identity.api.views import (
     ConfirmMfaEnrollmentView,
     RegenerateRecoveryCodesView,
+    RegisterWebauthnCredentialView,
     StaffLoginView,
     StaffMfaVerifyView,
     StartMfaEnrollmentView,
+    VerifyWebauthnAssertionView,
+    WebauthnAssertionOptionsView,
+    WebauthnRegistrationOptionsView,
 )
 
 __all__ = ["urlpatterns"]
@@ -36,6 +40,26 @@ urlpatterns: list[Any] = [
         "auth/staff/mfa/recovery-codes",
         RegenerateRecoveryCodesView.as_view(),
         name="regenerateRecoveryCodes",
+    ),
+    path(
+        "auth/webauthn/registration-options",
+        WebauthnRegistrationOptionsView.as_view(),
+        name="webauthnRegistrationOptions",
+    ),
+    path(
+        "auth/webauthn/registrations",
+        RegisterWebauthnCredentialView.as_view(),
+        name="registerWebauthnCredential",
+    ),
+    path(
+        "auth/webauthn/assertion-options",
+        WebauthnAssertionOptionsView.as_view(),
+        name="webauthnAssertionOptions",
+    ),
+    path(
+        "auth/webauthn/assertions",
+        VerifyWebauthnAssertionView.as_view(),
+        name="verifyWebauthnAssertion",
     ),
     path("auth/refresh", refresh_view, name="refreshToken"),
     path("auth/logout", logout_view, name="logout"),
