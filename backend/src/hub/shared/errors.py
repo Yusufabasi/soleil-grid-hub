@@ -22,6 +22,8 @@ __all__ = [
     "DomainError",
     "Duplicate",
     "ExternalUnavailable",
+    "InvalidCursor",
+    "InvalidRequest",
     "InvariantViolation",
     "NotFound",
     "PermissionDenied",
@@ -92,6 +94,26 @@ class PermissionDenied(DomainError):
     code = "forbidden"
     message_key = "forbidden"
     http_status = 403
+
+
+class InvalidRequest(DomainError):
+    """A malformed request that is not a schema violation: 400 (docs/05 section 5).
+
+    Query parameters and their combination live here: ``ValidationFailed`` (422) is for a
+    body that parsed and failed the schema, this is for a request the contract cannot serve.
+    """
+
+    code = "invalid_request"
+    message_key = "invalid_request"
+    http_status = 400
+
+
+class InvalidCursor(DomainError):
+    """A cursor that does not decode or has expired: 400, the client restarts (docs/03 7.7.5)."""
+
+    code = "invalid_cursor"
+    message_key = "invalid_cursor"
+    http_status = 400
 
 
 class NotFound(DomainError):

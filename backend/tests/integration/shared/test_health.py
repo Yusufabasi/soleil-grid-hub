@@ -160,7 +160,11 @@ def test_other_methods_are_refused_as_problem(urlconf: str) -> None:
 
 
 @pytest.mark.tc("TC-NFR-06-7")
-def test_only_health_routes_exist(urlconf: str) -> None:
+def test_health_is_the_only_route_outside_the_api_pool(urlconf: str) -> None:
     routes = _flatten(get_resolver().url_patterns)
 
-    assert routes == HEALTH_PATHS
+    assert HEALTH_PATHS <= routes
+    if urlconf != "hub.urls.api":
+        # Ingest, telemetry and stream serve health and nothing else; a stray route on a pool
+        # that never advertises it is how an endpoint escapes the contract (D-38).
+        assert routes == HEALTH_PATHS
