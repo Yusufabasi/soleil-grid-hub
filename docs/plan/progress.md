@@ -28,7 +28,7 @@ of the slice.
 | Task | Scope | Status | Commit | Test command and result |
 |---|---|---|---|---|
 | 01.1 | Unmanaged identity models and the permission class | done | `9bb28a3` | `cd backend && python -m pytest tests/architecture/test_permissions_yaml.py tests/architecture/test_identity_models.py -q` -> `10 passed`; `pytest tests/unit tests/architecture -q` -> `108 passed`; `pytest tests/integration -q -m integration` -> `31 passed`; root `pytest tests -q` -> `42 passed, 5 deselected`; `make lint` -> exit 0 (ruff, format, mypy strict, import-linter 119 kept, Django config checks) |
-| 01.2 | Audit adapter and audit view | not started | — | — |
+| 01.2 | Audit adapter and audit view | done | `1326c43` (prerequisite fix `50e8ac9`, refactor `d9b9275`) | `cd backend && python -m pytest tests/integration/identity/test_audit.py tests/integration/admin/test_audit_view.py -q` -> `14 passed` (chained seq and prev_hash, actor and address stored without personal details, deny-list refused, outcome lifted out of details, `hub_api` cannot UPDATE or DELETE, a tampered row reported at its exact seq, an anchor that no longer matches the head reported, administrator page plus its own `audit.read`, support agent 403 writing nothing, cursor paging, tampered cursor 400, missing stream 400, action prefix); `pytest -q` -> `153 passed, 0 skipped`; root `pytest tests -q` -> `42 passed, 5 deselected`; `make lint` -> exit 0 (ruff, format, mypy strict 176 files, import-linter 119 kept, Django config checks); `check_traceability.py` -> 0 errors; `openapi.yaml` valid |
 | 01.3 | EdDSA access tokens and bearer authentication | not started | — | — |
 | 01.4 | Refresh sessions, cookie views and CSRF guard | not started | — | — |
 | 01.5 | Local break-glass login, TOTP, recovery codes | not started | — | — |
@@ -62,6 +62,45 @@ of the slice.
 - **01.1 contract path and user model are settings**: `HUB_CONTRACT_DIR` (derived from
   `HUB_REPO_ROOT`) is where the permission class reads `permissions.yaml` and `openapi.yaml`,
   and `AUTH_USER_MODEL = "identity.User"` names the shim for any `get_user_model()` call.
+- **01.1 defect fixed in 01.2 — `db_table` was `hub.users`**: Django quotes `db_table` as one
+  identifier, so every identity model addressed a table literally named `hub.users` and the
+  first ORM insert failed. The schema resolves tables through each role's
+  `search_path = hub, pg_catalog` (D-43), so the models now name the bare table
+  (`50e8ac9`); the test alias sets the same `search_path` as a connection option, and
+  `check_db_alignment` refuses a dotted `db_table`.
+- **01.2 `outcome` is carried in `details`**: `hub.audit_log` has no column for it, and the
+  contract's `AuditEntry` requires it. `record` stores it as `details["outcome"]` (hashed with
+  the row, so it is tamper-evident) and the read path lifts it back out, leaving `details` with
+  what the caller supplied. A schema column would need a migration; this does not.
+- **01.2 `stream` is required, other audits are not filtered out**: `hub.audit_page` takes one
+  stream, and `hub_api` has no SELECT on `hub.audit_log`, so the application cannot even list
+  the streams that exist. A request without `stream` is refused with 400 `invalid_request`
+  rather than silently answering one stream; proposed as an amendment in
+  `docs/plan/contract-amendments.md` (`stream` becomes required on `listAuditLog`).
+- **01.2 the audit read path is forward-only**: `hub.audit_page` returns `seq > after_seq`,
+  oldest first, so `sort=-occurred_at` (the only other value the contract allows) is refused
+  with 400 `invalid_request` until a `before_seq` variant exists. The slice's own demo reads
+  the stream in increasing `seq`, which is what this gives.
+- **01.2 the cursor is a position, not a signed token**: it is base64url of `{"s": seq}`, and
+  anything that does not decode is 400 `invalid_cursor`. Signing belongs to the generic
+  `CursorEnvelopePagination` of docs/03 7.7.5, which needs the cursor key setting; the value
+  here reveals nothing a client cannot already read.
+- **01.2 reading `admin` appends to `admin`**: the `audit.read` row goes to the stream it read,
+  as the plan says, so the stream grows while it is paged. A page boundary can therefore be
+  followed by the previous request's own read row; the paging test states this rather than
+  hiding it.
+- **01.2 wiring modules instead of `application/wiring.py`**: the plan lists the wiring under
+  `application`, but the import-linter contract "Application does not depend on outer layers"
+  forbids it (wiring names `infrastructure`), so `hub.identity.wiring` and `hub.admin.wiring`
+  sit at package root, outside the layered contracts, like `bootstrap` does.
+- **01.2 test-time authentication is patched onto the view**: DRF reads
+  `DEFAULT_AUTHENTICATION_CLASSES` once, when `APIView` is imported, so a `REST_FRAMEWORK`
+  override only worked while the view module happened to be unimported — it passed alone and
+  returned 401 in the suite. The tests patch the view's `authentication_classes` with
+  `support.principals.SeededPrincipalAuthentication` instead (Task 01.3 replaces it).
+- **01.2 jsonb arrives as text**: Django's psycopg backend registers a text loader for `jsonb`
+  (so its own JSONField can apply a custom decoder), so the adapter parses `details` and
+  `record` still dumps with `Jsonb`.
   Neither adds an environment variable.
 - **01.1 tests beyond the plan's three**: the plan names the completeness test, the
   role-denial test and the undeclared-view test. Two more pin the other two outcomes of the
