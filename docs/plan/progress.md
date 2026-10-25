@@ -18,7 +18,7 @@ of the slice.
 | 00.7 | DjangoUnitOfWork, outbox writer, worker command stubs | done | `45ba2f6` | `cd backend && python -m pytest tests/integration/shared/test_uow.py tests/unit/shared/test_commands.py -q -m integration` -> `7 passed`, `pytest tests/unit/shared/test_commands.py -q` -> `6 passed`; `pytest tests/unit tests/architecture -q` -> `85 passed`; `pytest tests/integration -q -m integration` -> `24 passed`; ruff, ruff format, mypy strict clean; `python tools/check_django_config.py` -> exit 0; `manage.py run_worker/run_relay/run_scheduler --once` -> exit 0 with `loop.started` then `loop.stopped` JSON lines |
 | 00.8 | SQL baseline migration mechanism (`hubdb`) | done | `da2649c` | `cd backend && python -m pytest tests/integration/hubdb -q -m integration` -> `7 passed` (baseline byte copy, pairing rules incl. three negative trees, migrate-from-empty, catalog fingerprint equality, invariants on the migrated database, single-statement RunSQL); `pytest tests/integration -q -m integration` -> `31 passed`; `pytest tests/unit tests/architecture -q` -> `85 passed`; root `pytest tests -q` -> `36 passed`; ruff, ruff format, mypy strict clean; checker exit 0; `makemigrations --check` -> no changes |
 | 00.9 | Import-linter contracts and architecture tests | done | `e3122fe` | `cd backend && python -m pytest tests/architecture/test_importlinter.py -q` -> `11 passed` (skeleton clean, seven planted violations each caught, AST admin ban, generator current, module list matches packages); `make lint` -> exit 0 with `Contracts: 119 kept, 0 broken`; `pytest tests/unit tests/architecture -q` -> `96 passed`; `pytest tests/integration -q -m integration` -> `31 passed`; root `pytest tests -q` -> `36 passed` |
-| 00.10 | Images, compose stack, PgBouncer, HAProxy, stubs | not started | — | `python -m pytest tests/test_infra_skeleton.py -q` |
+| 00.10 | Images, compose stack, PgBouncer, HAProxy, stubs | done | `ab0fb82` | `python -m pytest tests/test_infra_skeleton.py -q` -> `6 passed` (five pools and routing order, log format without `%HU`/`%HQ`/`%r`, compose service and security matrix, one role URL per deployable, stub placeholders, PgBouncer transaction mode); `make up` -> 14 containers healthy, `migrate` and `db-logins` `Exited (0)`; `python -m pytest tests/test_stack_up.py -q -m integration` -> `1 passed`; `make lint` -> exit 0; root `pytest tests -q` -> `40 passed, 1 deselected` |
 | 00.11 | CI pipeline, security scans, verify script | not started | — | `python -m pytest tests/test_infra_skeleton.py -q` |
 | 00.12 | End-to-end verification, demo and evidence | not started | — | `make up && python -m pytest tests/test_stack_up.py -q -m integration` |
 
@@ -118,6 +118,61 @@ of the slice.
   contracts because the `anthropic_client` adapter and the pydantic models land in later
   slices; the warning stays visible in `make lint` output without failing the build.
 
+- **00.10 two image tags in docs/09 no longer exist**: `edoburu/pgbouncer:1.23.1` was never
+  published (that repository uses `v1.23.1-pN`) and `minio/minio` no longer resolves at all
+  (upstream withdrew its Docker Hub images), so the stack uses `pgbouncer/pgbouncer:1.23.1`
+  and MinIO's own binary from Bitnami's archived catalogue, pinned to a dated release tag as
+  the plan asks (`bitnamilegacy/minio:2025.7.23-debian-12-r5`). Both keep the documented
+  version and the service name; the substitutions are in the compose comments.
+- **00.10 hub-web stub runs unprivileged**: the stack requires every `hub-*` container to be
+  read-only, `cap_drop: [ALL]` and `no-new-privileges`, and the root `nginx:1.27-alpine` needs
+  `CAP_SETUID`/`CAP_SETGID` to drop to its worker user, so the stub uses
+  `nginxinc/nginx-unprivileged:1.27-alpine` and listens on 3000, the port the real Next.js
+  server uses. Nothing about the balancer or the health check changes when `WEB=real` swaps it.
+- **00.10 HAProxy: three fixes to make the sketch load**: `http-request allow-l7-retry` is not
+  a directive in HAProxy 3.0, so the two ingest pools get `option http-buffer-request` (the
+  actual precondition for retrying a POST) beside `retry-on conn-failure empty-response 503`;
+  `http-response` rules cannot evaluate `path_beg` ACLs, so the pool decision and the static
+  flag are captured in `txn.pool`/`txn.static` while the request is parsed and the response
+  rules read those; and the admin socket lives in `/var/lib/haproxy` instead of `/var/run`,
+  because the image runs as uid 99 and `/var/run` is a root-owned symlink, with a named volume
+  so it survives a restart.
+- **00.10 gunicorn control socket**: gunicorn 26 opens `$HOME/.gunicorn/gunicorn.ctl` by
+  default, which is a read-only path in the image and unreachable from outside a container
+  anyway; `control_socket_disable = True` is set because draining is driven by SIGTERM through
+  `deploy/entrypoint-drain.sh`. The setting requires gunicorn >= 26, which `uv.lock` pins.
+- **00.10 uv installed from PyPI**: the builder stage installs `uv==0.13.5` from the index the
+  application dependencies already come from, instead of copying it out of `ghcr.io`; a build
+  then depends on one registry, not two (the first real build failed on a ghcr.io lookup).
+  uv >= 0.10 writes hashes into `uv export` by default, so the task's `--require-hashes`
+  intent holds: pip installs in hash-checking mode from that file.
+- **00.10 `logins.sql` lives outside `pg-init/`**: everything in
+  `/docker-entrypoint-initdb.d` also runs at first boot, so a `logins.sql` there executed
+  without its psql variables and aborted initialisation (the first `make up` failed on it).
+  Only `00-create-db.sh` is an init script; the logins step is the separate `db-logins`
+  service that runs after `migrate` completed.
+- **00.10 `userlist.txt` is 0644, not 0600**: PgBouncer reads the file as uid 70 inside its
+  container while the host user that runs `gen_dev_userlist.sh` is a different uid, so a
+  private file is simply unreadable there (the first authentication attempt failed with `no
+  such user: hub_api`). The values are the `dev` passwords of a throwaway cluster, the file is
+  git-ignored, and a real environment takes its userlist from the secrets manager.
+- **00.10 local host names**: `HUB_ALLOWED_HOSTS` gained `127.0.0.1` (the compose probes) and
+  `hub` (the Host the balancer's health checks send, docs/09 1.4). `.env.example` also gained
+  `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD` (both `dev`), because the MinIO container needs
+  credentials and the task 00.1 rule is that every documented variable is in that file.
+- **00.10 `migrate` runs as the superuser locally**: `0000_baseline.sql` creates the roles,
+  ownership and grants, so the compose service overrides `HUB_MIGRATE_URL` with the cluster
+  superuser and says so in a comment; `.env.example` keeps the `migrator` value a real
+  environment uses after that first step (docs/04 10.5).
+- **00.10 default `make up` and the two stubs**: `provider-stub` and `meter-sim` sit on the
+  `stubs` profile, so a plain `make up` starts 16 containers (14 running, `migrate` and
+  `db-logins` exited 0) and stays quiet until slice-T1/T2 replace them. `make up` builds with
+  `--build` so an edited Dockerfile is always picked up; the layer cache keeps a warm start
+  to a few seconds.
+- **00.10 Prometheus has a scrape file but no server**: the plan adds the Prometheus, Tempo,
+  Loki and Grafana services with the dashboards (plan note 10), so `prometheus.yml` is the
+  contract that slice mounts and the collector keeps the `debug` exporter in the meantime.
+
 ## Open change requests
 
 None.
@@ -126,3 +181,34 @@ None.
 
 `make verify SLICE=00` output: pending (task 00.12).
 Demo script result: pending (task 00.12).
+
+### Task 00.10: the stack, as observed
+
+```
+$ make up
+... Container soleil-lb-1 Healthy
+... 13 further containers Healthy (hub-api, both ingest pools, hub-stream, hub-web,
+    hub-worker/relay/scheduler, pg-primary, pgbouncer, redis, minio, otel-collector)
+... soleil-migrate-1 Exited (0)      soleil-db-logins-1 Exited (0)
+
+$ curl -si localhost:8080/api/v1/health/live
+HTTP/1.1 200 OK
+x-request-id: 607bb2bd-6af9-4c2d-88fe-dad73ba2c3c3
+content-security-policy: default-src 'none'; frame-ancestors 'none'
+
+$ curl -s localhost:8080/api/v1/health/ready
+{"data":{"status":"ok","version":"dev","time":"2026-10-25T01:36:06.517227+00:00",
+ "checks":[{"name":"postgres","status":"ok","latency_ms":22},
+           {"name":"redis","status":"ok","latency_ms":3}]}}
+
+$ curl -si localhost:8080/
+HTTP/1.1 200 OK
+content-type: text/html
+
+$ python -m pytest tests/test_stack_up.py -q -m integration
+1 passed in 0.10s
+```
+
+The 503 that the first start produced was real and instructive: the readiness view answered
+`service_unavailable` because PgBouncer could not read its userlist (see the assumption above),
+which is exactly the failure the `postgres: ok` check is there to surface.
