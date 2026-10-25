@@ -9,8 +9,22 @@ from typing import Any
 from django.conf import settings
 from django.urls import path
 
+from hub.identity.api.approval_views import (
+    ApprovalApproveView,
+    ApprovalCollectionView,
+    ApprovalDetailView,
+    ApprovalRejectView,
+)
 from hub.identity.api.cookie_views import logout_view, refresh_view
 from hub.identity.api.oidc_views import oidc_callback_view, oidc_start_view
+from hub.identity.api.user_views import (
+    RoleCollectionView,
+    UserCollectionView,
+    UserDetailView,
+    UserMfaResetView,
+    UserRolesView,
+    UserSitesView,
+)
 from hub.identity.api.views import (
     ConfirmMfaEnrollmentView,
     MeView,
@@ -65,6 +79,24 @@ urlpatterns: list[Any] = [
         VerifyWebauthnAssertionView.as_view(),
         name="verifyWebauthnAssertion",
     ),
+    path("approvals", ApprovalCollectionView.as_view(), name="listApprovals"),
+    path("approvals/<uuid:approval_id>", ApprovalDetailView.as_view(), name="getApproval"),
+    path(
+        "approvals/<uuid:approval_id>/approve",
+        ApprovalApproveView.as_view(),
+        name="approveApproval",
+    ),
+    path(
+        "approvals/<uuid:approval_id>/reject",
+        ApprovalRejectView.as_view(),
+        name="rejectApproval",
+    ),
+    path("users", UserCollectionView.as_view(), name="listUsers"),
+    path("users/<uuid:user_id>", UserDetailView.as_view(), name="getUser"),
+    path("users/<uuid:user_id>/roles", UserRolesView.as_view(), name="replaceUserRoles"),
+    path("users/<uuid:user_id>/sites", UserSitesView.as_view(), name="replaceUserSites"),
+    path("users/<uuid:user_id>/mfa-reset", UserMfaResetView.as_view(), name="resetUserMfa"),
+    path("roles", RoleCollectionView.as_view(), name="listRoles"),
     path("auth/step-up", StepUpView.as_view(), name="stepUp"),
     path("me", MeView.as_view(), name="getMe"),
     path("auth/refresh", refresh_view, name="refreshToken"),

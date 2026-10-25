@@ -16,9 +16,12 @@ from typing import Any
 
 from rest_framework import serializers
 
+from hub.identity.application.approvals import KIND_TO_ACTION
 from hub.identity.contracts import Principal
 
 __all__ = [
+    "ApprovalCreateInput",
+    "ApprovalDecisionInput",
     "MfaVerifyInput",
     "OtpRequestInput",
     "OtpVerifyInput",
@@ -122,6 +125,23 @@ class WebAuthnAssertionInput(serializers.Serializer[dict[str, Any]]):
     mfa_token = serializers.CharField(max_length=128)
     challenge_id = serializers.UUIDField()
     credential = serializers.DictField()
+
+
+class ApprovalCreateInput(serializers.Serializer[dict[str, Any]]):
+    """``ApprovalCreate``: the kind decides which role may propose it."""
+
+    kind = serializers.ChoiceField(choices=tuple(KIND_TO_ACTION))
+    subject_type = serializers.CharField(max_length=32, required=False)
+    subject_id = serializers.UUIDField(required=False)
+    payload = serializers.DictField()
+    reason = serializers.CharField(min_length=5, max_length=1000)
+
+
+class ApprovalDecisionInput(serializers.Serializer[dict[str, Any]]):
+    """``ApprovalDecision``: an approval is only valid for the hash it was shown."""
+
+    payload_hash = serializers.CharField(max_length=128, required=False, allow_blank=False)
+    note = serializers.CharField(max_length=1000, required=False, allow_blank=True)
 
 
 class MeUpdateInput(serializers.Serializer[dict[str, Any]]):

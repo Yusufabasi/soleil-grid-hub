@@ -529,3 +529,13 @@ class SessionRepository:
                 "UPDATE hub.refresh_tokens SET revoked_at = coalesce(revoked_at, %s) WHERE id = %s",
                 [at, session_id],
             )
+
+    def revoke_all_for_user(self, user_id: UUID, *, at: datetime) -> int:
+        """Every family this user still holds: what an MFA reset and a suspension need (D-21)."""
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE hub.refresh_tokens SET revoked_at = coalesce(revoked_at, %s) "
+                "WHERE user_id = %s AND revoked_at IS NULL",
+                [at, user_id],
+            )
+            return int(cursor.rowcount)

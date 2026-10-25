@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 
 from django.conf import settings
 
+from hub.identity.application.approvals import ApprovalService, ExecutorRegistry
 from hub.identity.application.local_login import (
     EnrollmentService,
     LocalLogin,
@@ -27,10 +28,18 @@ from hub.identity.application.oidc import OidcLogin
 from hub.identity.application.sessions import SessionLimits, SessionService
 from hub.identity.application.step_up import StepUpService
 from hub.identity.application.tokens import AccessTokenService
+from hub.identity.application.user_admin import (
+    CreateUserExecutor,
+    GrantRoleExecutor,
+    ResetMfaExecutor,
+    UserAdminService,
+)
 from hub.identity.application.webauthn import WebauthnService
 from hub.identity.contracts import AuditLog, Principal
+from hub.identity.infrastructure.approvals import ApprovalRepository
 from hub.identity.infrastructure.audit import HubAuditLog
 from hub.identity.infrastructure.repositories import SessionRepository, UserRepository
+from hub.identity.infrastructure.user_admin import UserAdminRepository
 from hub.shared import clock as kernel_clock
 from hub.shared.clock import SystemClock
 from hub.shared.contracts import KeyValueStore
@@ -40,6 +49,8 @@ from hub.shared.redis import get_store
 from hub.shared.uow import DjangoUnitOfWork, PrincipalContext, UnitOfWork
 
 __all__ = [
+    "approval_registry",
+    "approvals",
     "audit_log",
     "clock",
     "ids",
@@ -53,6 +64,7 @@ __all__ = [
     "store",
     "tokens",
     "unit_of_work",
+    "user_admin",
     "users",
     "webauthn",
 ]
@@ -71,15 +83,20 @@ _enrollment: EnrollmentService | None = None
 _webauthn: WebauthnService | None = None
 _oidc: OidcLogin | None = None
 _step_up: StepUpService | None = None
+_approvals: ApprovalService | None = None
+_approval_registry: ExecutorRegistry | None = None
+_user_admin: UserAdminService | None = None
 
 
 def reset() -> None:
     """Drop every cached adapter; tests use it after changing a setting."""
     global _clock, _ids, _store, _tokens, _users, _sessions, _audit_log  # noqa: PLW0603
     global _local_login, _mfa, _enrollment, _webauthn, _oidc, _step_up  # noqa: PLW0603
+    global _approvals, _approval_registry, _user_admin  # noqa: PLW0603
     with _lock:
         _clock = _ids = _store = _tokens = _users = _sessions = _audit_log = None
         _local_login = _mfa = _enrollment = _webauthn = _oidc = _step_up = None
+        _approvals = _approval_registry = _user_admin = None
 
 
 def use_clock(clock: Clock) -> None:
@@ -283,6 +300,86 @@ def step_up() -> StepUpService:
                     webauthn=webauthn(),
                 )
     return _step_up
+
+
+def approval_registry() -> ExecutorRegistry:
+    """The kinds this deployment can execute, with the rights each approver must hold.
+
+    The registry is filled here, once per process: an approval kind with no executor would be a
+    stored proposal nobody can ever execute, so every kind this build understands is registered
+    at composition time. A test may register its own executor on the returned registry to
+    replace one; :func:`reset` drops the whole registry with everything else.
+    """
+    global _approval_registry  # noqa: PLW0603
+    if _approval_registry is None:
+        with _lock:
+            if _approval_registry is None:
+                _approval_registry = _build_registry()
+    return _approval_registry
+
+
+def _build_registry() -> ExecutorRegistry:
+    """The executors this build can run, each with the permission its approver must hold."""
+    registry = ExecutorRegistry()
+    user_store = UserAdminRepository()
+    registry.register(
+        "user_creation",
+        required_permission="user.admin",
+        required_attribute=None,
+        execute=CreateUserExecutor(
+            store=user_store, audit=audit_log(), clock=clock(), ids=ids()
+        ),
+    )
+    registry.register(
+        "role_grant",
+        required_permission="user.admin",
+        required_attribute=None,
+        execute=GrantRoleExecutor(
+            store=user_store, tokens=users(), audit=audit_log(), clock=clock()
+        ),
+    )
+    registry.register(
+        "mfa_reset",
+        required_permission="user.admin",
+        required_attribute=None,
+        execute=ResetMfaExecutor(
+            mfa=users(), sessions=SessionRepository(), audit=audit_log(), clock=clock()
+        ),
+    )
+    return registry
+
+
+def user_admin() -> UserAdminService:
+    """The administrator's surface: the catalogue, the accounts and the four proposals."""
+    global _user_admin  # noqa: PLW0603
+    if _user_admin is None:
+        with _lock:
+            if _user_admin is None:
+                _user_admin = UserAdminService(
+                    clock=clock(),
+                    approvals=approvals(),
+                    store=UserAdminRepository(),
+                    audit=audit_log(),
+                )
+    return _user_admin
+
+
+def approvals() -> ApprovalService:
+    """Maker-checker: the queue, the decision and the executor that runs on approval."""
+    global _approvals  # noqa: PLW0603
+    if _approvals is None:
+        with _lock:
+            if _approvals is None:
+                _approvals = ApprovalService(
+                    clock=clock(),
+                    ids=ids(),
+                    repository=ApprovalRepository(),
+                    registry=approval_registry(),
+                    audit=audit_log(),
+                    unit_of_work=unit_of_work,
+                    ttl_hours=int(settings.HUB_APPROVAL_TTL_HOURS),
+                )
+    return _approvals
 
 
 def audit_log() -> AuditLog:
