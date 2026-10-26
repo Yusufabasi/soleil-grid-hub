@@ -52,6 +52,9 @@ COPY --chown=10001:10001 backend/manage.py /app/manage.py
 COPY --chown=10001:10001 backend/src /app/src
 COPY --chown=10001:10001 backend/deploy /app/deploy
 COPY --chown=10001:10001 db /app/db
+# The permission class reads api/permissions.yaml and api/openapi.yaml once per process; without
+# them every gated operation answers 500 while the health routes (which allow anyone) stay green.
+COPY --chown=10001:10001 api /app/api
 
 RUN chmod 0555 /app/deploy/entrypoint-drain.sh
 

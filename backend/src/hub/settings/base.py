@@ -8,6 +8,7 @@ string, in its own module.
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -54,8 +55,14 @@ USE_TZ = True
 
 # --- tokens, sessions and MFA (docs/03 2.2, D-16, D-17) -----------------------------------
 # The Ed25519 key pair is the only signing authority of the API; a missing pair in a real
-# deployment is a start-up failure, never a silent fallback. Local and test runs mint an
-# ephemeral pair at import so `make up` needs no secret in the repository (progress.md).
+# deployment is a start-up failure, never a silent fallback. Local and test runs derive a
+# *fixed, public* pair from a constant seed so `make up` needs no secret in the repository
+# and every gunicorn worker of the local stack signs with the same key: a per-process
+# ephemeral pair made a token minted by one worker unverifiable by the next, which the
+# gunicorn stack showed as a random 401 but a single-process test run never could.
+LOCAL_JWT_KEY_SEED = b"soleil-grid-hub/local-only/not-a-secret"
+
+
 def _jwt_keys() -> tuple[str, str]:
     configured_private = env.str("HUB_JWT_PRIVATE_KEY", default="")
     configured_public = env.str("HUB_JWT_PUBLIC_KEY", default="")
@@ -69,7 +76,8 @@ def _jwt_keys() -> tuple[str, str]:
         raise ImproperlyConfigured(
             "Set HUB_JWT_PRIVATE_KEY and HUB_JWT_PUBLIC_KEY (Ed25519, PEM) outside local/test"
         )
-    key = Ed25519PrivateKey.generate()
+    # Deterministic and therefore public: local/test only, guarded above.
+    key = Ed25519PrivateKey.from_private_bytes(hashlib.sha256(LOCAL_JWT_KEY_SEED).digest())
     private = key.private_bytes(
         serialization.Encoding.PEM,
         serialization.PrivateFormat.PKCS8,
