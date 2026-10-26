@@ -151,7 +151,9 @@ class UserAdminRepository:
                 "FROM hub.role_permissions rp WHERE rp.role_code = r.code), '{}') "
                 "FROM hub.roles r ORDER BY r.code"
             )
-            return [RoleRow(str(code), str(text), tuple(perms or ())) for code, text, perms in cursor]
+            return [
+                RoleRow(str(code), str(text), tuple(perms or ())) for code, text, perms in cursor
+            ]
 
     # --- writes the executors run ------------------------------------------------------
     def insert(

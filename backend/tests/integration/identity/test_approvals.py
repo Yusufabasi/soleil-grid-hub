@@ -107,7 +107,9 @@ def propose(
     if subject_id is not None:
         body["subject_id"] = str(subject_id)
     return client.post(
-        APPROVALS, data=body, content_type="application/json",
+        APPROVALS,
+        data=body,
+        content_type="application/json",
         HTTP_AUTHORIZATION=f"Bearer {token}",
     )
 
@@ -174,9 +176,7 @@ def test_payload_hash_mismatch_409(
     created = propose(client, token_for(maker, clock))
     approval_id = created.json()["data"]["id"]
 
-    refused = approve(
-        client, token_for(approver, clock), approval_id, payload_hash="0" * 64
-    )
+    refused = approve(client, token_for(approver, clock), approval_id, payload_hash="0" * 64)
 
     assert refused.status_code == 409
     assert refused.json()["code"] == "approval_payload_mismatch"

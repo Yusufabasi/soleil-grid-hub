@@ -441,9 +441,9 @@ class ApprovalService:
         customer_id = row["subject_customer_id"]
         if customer_id is None:
             return
-        if self._repository.is_linked(principal.subject_id, customer_id) or self._repository.is_linked(
-            row["maker_user_id"], customer_id
-        ):
+        if self._repository.is_linked(
+            principal.subject_id, customer_id
+        ) or self._repository.is_linked(row["maker_user_id"], customer_id):
             raise PermissionDenied(code="conflict_of_interest")
 
     # --- helpers ------------------------------------------------------------------------

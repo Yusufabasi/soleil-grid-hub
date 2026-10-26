@@ -79,8 +79,9 @@ def binding_of(response: Any) -> str:
 
 def callback(factory: RequestFactory, *, code: str, state: str, binding: str | None) -> Any:
     query = urlencode({"code": code, "state": state})
-    headers = {"HTTP_COOKIE": f"{COOKIE}={binding}"} if binding else {}
-    return oidc_callback_view(factory.get(f"/api/v1/auth/oidc/callback?{query}", **headers))
+    extra: Any = {"HTTP_COOKIE": f"{COOKIE}={binding}"} if binding else {}
+    request: HttpRequest = factory.get(f"/api/v1/auth/oidc/callback?{query}", **extra)
+    return oidc_callback_view(request)
 
 
 def problem(response: Any) -> dict[str, Any]:

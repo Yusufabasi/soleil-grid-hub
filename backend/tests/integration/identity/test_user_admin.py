@@ -300,7 +300,11 @@ def test_update_user_writes_directly_and_suspension_revokes_tokens(
     assert renamed.json()["data"]["locale"] == "fr"
 
     suspended = call(
-        client, "patch", f"{USERS}/{target.user_id}", token_for(actor, clock), {"status": "suspended"}
+        client,
+        "patch",
+        f"{USERS}/{target.user_id}",
+        token_for(actor, clock),
+        {"status": "suspended"},
     )
     assert suspended.status_code == 200, suspended.content
     assert suspended.json()["data"]["status"] == "suspended"
