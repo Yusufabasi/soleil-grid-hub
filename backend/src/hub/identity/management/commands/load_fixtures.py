@@ -41,7 +41,10 @@ from hub.identity.infrastructure.crypto import encrypt_secret
 from hub.shared.security import hash_password
 
 SEEDABLE_ENVIRONMENTS = frozenset({"local", "test", "ci"})
-DATABASE_NAME_RE = re.compile(r"^hub_(local|test|ci)(_[a-z0-9]+)?$")
+# `hub` is the compose stack's database and `hub_rw`/`hub_ro` are the PgBouncer routes to it;
+# the suffixed forms are the throwaway ones. A name that looks production-shaped (anything else)
+# is refused even in a local environment, which is the one case the variable cannot distinguish.
+DATABASE_NAME_RE = re.compile(r"^hub(_(local|test|ci)(_[a-z0-9]+)?|_rw|_ro)?$")
 REFUSAL_EXIT_CODE = 3
 SEED_NAMESPACE = uuid.UUID("6f1c3b4e-7a2d-5b6c-9d8e-0a1b2c3d4e5f")
 # Published on purpose: the account exists only in a throwaway database (see the seed file).
@@ -59,7 +62,7 @@ def refusal(environment: str, database_name: str) -> str | None:
     if environment not in SEEDABLE_ENVIRONMENTS:
         return f"HUB_ENV is {environment!r}; fixtures run only in local, test or ci"
     if not DATABASE_NAME_RE.fullmatch(database_name):
-        return f"database {database_name!r} is not a hub_<local|test|ci> database"
+        return f"database {database_name!r} is not a local, test or ci hub database"
     return None
 
 
@@ -93,7 +96,16 @@ class Command(BaseCommand):
             plan_id = self._plan(data["plan"])
             for record in data["staff"]:
                 self._staff(record, password=password, site_id=site_id, now=now)
-            self._customer(data["customer"], site_id=site_id, plan_id=plan_id)
+            actor = next(
+                (record for record in data["staff"] if "administrator" in record["roles"]),
+                data["staff"][0],
+            )
+            self._customer(
+                data["customer"],
+                site_id=site_id,
+                plan_id=plan_id,
+                actor_id=uuid.uuid5(SEED_NAMESPACE, str(actor["email"]).lower()),
+            )
 
         self.stdout.write(
             self.style.SUCCESS(
@@ -181,9 +193,23 @@ class Command(BaseCommand):
                     [user_id, site_id],
                 )
 
-    def _customer(self, record: dict[str, Any], *, site_id: uuid.UUID, plan_id: uuid.UUID) -> None:
+    def _customer(
+        self,
+        record: dict[str, Any],
+        *,
+        site_id: uuid.UUID,
+        plan_id: uuid.UUID,
+        actor_id: uuid.UUID,
+    ) -> None:
+        """Insert the customer as an administrator would: the policy needs a visible site.
+
+        `hub.customers` has row-level security forced even for its owner, and the staff policy
+        asks `hub.site_visible(site_id)` — nobody without a claim may write a customer. The
+        seed announces the administrator it just created for this transaction only.
+        """
         customer_id = uuid.UUID(str(record["id"]))
         with connection.cursor() as cursor:
+            cursor.execute("SELECT set_config('app.user_id', %s, true)", [str(actor_id)])
             cursor.execute(
                 "INSERT INTO hub.customers "
                 "(id, site_id, plan_id, full_name, phone_e164, email, language) "

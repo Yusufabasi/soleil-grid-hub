@@ -19,6 +19,7 @@ from django.core.management import call_command
 from django.db import connection
 
 from hub.identity.infrastructure.crypto import decrypt_secret
+from hub.identity.management.commands.load_fixtures import refusal
 from hub.shared.security import verify_password
 
 pytestmark = [pytest.mark.integration, pytest.mark.django_db]
@@ -109,6 +110,17 @@ def test_running_twice_changes_nothing() -> None:
         assert cursor.fetchone()[0] == grants
         cursor.execute("SELECT count(*) FROM hub.customers")
         assert cursor.fetchone()[0] == 1
+
+
+def test_target_names_are_guard_rails() -> None:
+    """The environment is the real guard; the name catches a shell pointed somewhere else."""
+    assert refusal("local", "hub") is None
+    assert refusal("local", "hub_rw") is None, "the compose stack connects through PgBouncer"
+    assert refusal("test", "hub_test") is None
+    assert refusal("ci", "hub_ci_build7") is None
+    assert refusal("production", "hub") is not None
+    assert refusal("local", "hub_prod") is not None
+    assert refusal("local", "soleil") is not None
 
 
 def test_refuses_outside_a_seedable_environment(settings: Any) -> None:
