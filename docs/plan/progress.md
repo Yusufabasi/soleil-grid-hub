@@ -37,8 +37,8 @@ of the slice.
 | 01.8 | Step-up, `/me`, locale in the principal | done | `c8f9d8b` | `cd backend && python -m pytest tests/integration/identity/test_step_up.py tests/integration/identity/test_me.py -q` -> `39 passed` (299 s accepted and 301 s refused with 401 `step_up_required`, `step_up.max_age: 300` and `WWW-Authenticate: Bearer error="insufficient_user_authentication", max_age=300`; a TOTP step-up returns a token whose principal carries the fresh `auth_time`, leaves the cookie alone and then passes the guarded operation; the same code cannot be replayed; a token minted by a step-up dies with its session when the token version is bumped; every guarded rule refuses a stale principal and accepts a fresh one; `/me` returns roles, attributes, a real site id, locale, `mfa_enrolled`, `acr` and `auth_time`; `PATCH /me` stores `fr` and stores `de` as `en`; a 422 detail follows the caller's stored language with no `Accept-Language` header; `/me` without a token is a 401 with a bearer challenge); `pytest -q` -> `256 passed`; `make lint` -> exit 0 (ruff, format, mypy strict 172 files, import-linter 119 kept, Django config checks) |
 | 01.9 | ApprovalService, executor registry, conflict check | done | `fbcbcf3` | `cd backend && python -m pytest tests/integration/identity/test_approvals.py -q` -> `22 passed` (the maker refused from a second session as well as the first surface; a presented `payload_hash` that differs from the stored one is 409 `approval_payload_mismatch` and the executor never runs; the executor receives the stored payload, not the decision body; a raised executor rolls the decision back and the row stays `pending`; an approver linked to the subject customer is 403 `conflict_of_interest`; a proposal past its TTL is 409 `approval_not_pending` and reads as `expired`; an approver without the executor's permission or attribute is 403 while one with it succeeds; a list shows only the kinds the caller may decide; all eleven schema actions refuse their own maker in a parametrised sweep; a rejected proposal cannot then be approved; a contract kind with no database action is 422 and a kind this caller may not propose is 403 `forbidden`); `pytest tests/integration/identity tests/integration/admin -q` -> `140 passed`; `mypy src` -> 178 files clean; `lint-imports` -> `119 kept, 0 broken` |
 | 01.10 | User administration approvals and MFA reset | done | `fbcbcf3` | `cd backend && python -m pytest tests/integration/identity/test_user_admin.py -q` -> `10 passed` (`POST /users` answers 202 with a `user_creation` approval, a `Location` and no account in `GET /users` until a second administrator approves; the maker is 403 `self_approval_forbidden`; a taken address is 409 `duplicate_resource`; a role grant is `role.grant` and only changes roles, attributes and the token version on approval, after which the target's earlier access token is 401 `token_revoked`; a site change is a proposal too and shows up in the user document only afterwards; an MFA reset leaves the factor enrolled, the secret and the unused recovery code in place and the session live until approval, then clears the secret, deletes the codes, drops the credential and revokes the session; a second administrator is required for the reset as well; `PATCH /users/{id}` writes name and locale directly and suspending kills the target's token; the last administrator cannot be demoted and a fourth cannot be granted, both 409; `GET /roles` lists the four roles with their permissions and `GET /users?role=` filters); `mypy src` -> clean; `ruff check` -> clean; `lint-imports` -> `119 kept, 0 broken` |
-| 01.11 | Customer one-time-code login with abuse controls | not started | — | — |
-| 01.12 | Authorization matrix, RLS context and fixtures | not started | — | — |
+| 01.11 | Customer one-time-code login with abuse controls | done | `87e4e28` (style prerequisite `648ac4a`) | `cd backend && python -m pytest tests/integration/identity/test_customer_otp.py -q` -> `9 passed` (a known and an unknown number both answer 202 with the same keys, a different `challenge_id` and the same limits, and the unknown one writes a decoy row with `max_attempts = 0` and sends nothing while the known one sends exactly one code in the requested locale; an unsolved and an already-spent proof are both 422 `proof_required`, the second proving the challenge is popped before it is checked; a prefix outside `HUB_OTP_ALLOWED_PREFIXES` is 422 `prefix_not_allowed` and writes no row; the three hourly ceilings each answer 429 with `Retry-After: 3600` at the fourth, eleventh and thirty-first request; five wrong codes kill the challenge and the sixth attempt is 401 `otp_invalid` even with the right code; a customer dormant 91 days gets a `reverify` challenge and signs in, while a `login` challenge requested before dormancy is 401 once the last sign-in is 91 days old; the session is a customer one with a 600 s access token, `type: customer` and a refresh cookie that still works at 299 s and is 401 `session_expired` at 300 s); `pytest tests/integration/identity tests/integration/admin tests/architecture -q` -> `216 passed`; `ruff check`/`ruff format --check` -> clean; `mypy` -> 219 files clean; `lint-imports` -> `119 kept, 0 broken` |
+| 01.12 | Authorization matrix, RLS context and fixtures | done | see below | `cd backend && python -m pytest tests/contract/test_auth_matrix.py -q` -> `26 passed, 12 skipped` (every one of the 33 operations `hub.urls.api` actually mounts, called with a real EdDSA token for each of the four staff roles: explicitly allowed cells never answer 401/403 and every other cell does; the 12 skips are the public operations, which a staff token proves nothing about; anonymous GETs are 401 everywhere except the public ones; a refusal writes `authz.denied` to the `auth` stream with the actor, the operation and `reason: role`, `outcome: denied` inside the hash; a customer token is still 401 `token_revoked`, and machine-only operations are 401 without a key); `pytest tests/integration/identity/test_rls_context.py -q` -> `5 passed` (a unit of work sets `app.user_id`/`app.customer_id` for exactly its transaction and the next one sees no leftover claim; two interleaved transactions on reused `hub_api` connections each see only their own customer and the same connection without the claim sees zero rows; a site-bound support agent sees only their site and an `all_sites` user sees both; a customer claim cannot read or update another customer's row); `pytest tests/integration/identity/test_fixtures.py -q` -> `5 passed` (`load_fixtures` seeds an active account per role with the published password and TOTP secret, the `finance_lead` attribute, two administrators and one active `fr` customer, is idempotent, and refuses `HUB_ENV=production` with exit code 3 without writing); `pytest tests/unit/identity tests/integration/identity tests/integration/admin tests/architecture -q` -> `230 passed`; `make lint` equivalents -> ruff, format, mypy 223 files, import-linter 119 kept, Django config checks all clean; `make contracts` equivalents -> 34 passed, traceability 0 errors, `openapi.yaml` valid |
 
 ## Assumptions
 
@@ -450,6 +450,56 @@ of the slice.
   mypy's Django plugin before the AST rule prints, so the rule is demonstrated with
   `python tools/check_django_config.py`, which names it (`D-42: never installed`); both gates
   are part of `make lint`.
+- **01.11 dormancy is read from the session table**: `hub.customers` has no `last_login_at`
+  column, so `CustomerDirectory` derives a customer's last sign-in from
+  `max(refresh_tokens.issued_at)` for that customer. A completed login always writes that row,
+  the value survives a revoked session, and there is no second copy to keep in step. The
+  alternative — a migration adding a column — is what a later slice can do if the query ever
+  needs its own index.
+- **01.11 the SMS notifier is a recording adapter**: slice 07 owns the gateway integration, and
+  the only behaviour the contract pins here is that an unknown number sends nothing. The
+  adapter records what it would send and logs the event with the locale and the last two digits
+  of the number, never the code; `CustomerOtpService` depends on the `Notifier` protocol, so
+  wiring a real gateway changes one factory.
+- **01.11 refresh builds a customer principal too**: the cookie flow is the same for both
+  account kinds, and `_principal_for` previously refused a session with no `user_id`. It now
+  asks `CustomerOtpService.principal_for`, which re-reads the customer (an erased or suspended
+  customer is refused), so a customer's 12-hour absolute session can be rotated.
+- **01.12 the matrix is bounded by what is mounted**: `api/openapi.yaml` declares 166
+  operations for all sixteen slices and this build routes 33 of them. Asserting the other 133
+  would only assert that Django answers 404, so the test resolves each path first and skips the
+  ones with no route; the 12 further skips are the public operations, whose behaviour a staff
+  token cannot prove and whose own suites (login, one-time code, WebAuthn, health) do prove it.
+- **01.12 customer, integrator and gateway rows are pinned, not exercised**: hub-api has no
+  customer handler beyond `/me` and no API-key authentication until slice 15, so there is no
+  credential to present for those kinds yet. `test_customer_token_is_not_a_hub_api_credential`
+  fixes today's answer (401 `token_revoked`) and `test_machine_operations_are_not_open_without_a_key`
+  fixes that a machine-only operation is never open; both are expected to fail — loudly — when
+  slice 02 and slice 15 land, at which point those rows join the matrix instead.
+- **01.12 the object-level cell is proven at the row, not behind a route**: the "customer A
+  reads customer B's wallet" cell needs a customer-scoped resource endpoint, and slice 01 mounts
+  none. What is proven instead is the mechanism it will rely on: the forced RLS policies make a
+  foreign customer's row invisible and immutable for `hub_api` under a customer claim, a
+  site-bound staff claim sees only its sites, and every permission refusal now writes an
+  `authz.denied` row. The 404-versus-403 policy for other customers' objects is slice 02's
+  `require_site`/ownership work.
+- **01.12 `load_fixtures` lives in `hub.identity`**: the plan's Files block puts it in
+  `hub.shared.management.commands`, but `hub.shared` may not import a business module and the
+  command needs `identity.infrastructure.crypto.encrypt_secret` to store a TOTP secret. A
+  command in `hub.identity` is discovered by the same `manage.py` call. Slice T3 owns the full
+  fixture package and can move it back once the secret-writing part is registered through a
+  seam like the denial recorder.
+- **01.12 the denied-access hook is a registration seam**: `hub.shared.api.permissions` cannot
+  import the audit adapter (`hub.shared` imports no business module), so it exposes
+  `set_denial_recorder` and `IdentityConfig.ready` installs `record_access_denied`. The hook
+  writes to the `auth` stream, action `authz.denied`, with `operation`, `reason` and
+  `outcome: denied` inside `details`; a failure to write is logged and never changes the 401/403
+  the caller receives.
+- **01.12 verification step 6 could not run**: `backend/tests/contract/test_openapi_conformance.py`
+  (schemathesis) does not exist in this tree, so the `-k "Auth or Approvals or Admin"` selection
+  collects nothing. The contract side that does exist — `tests/contract/test_auth_matrix.py`,
+  the schema-in-postgres suite, traceability and the OpenAPI validator — is green. The
+  conformance harness belongs to the verification-tooling track (T4) and is listed below.
 
 ## Open change requests
 
