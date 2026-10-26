@@ -214,13 +214,14 @@ def test_a_denied_call_is_written_to_the_audit_trail(
     assert details["outcome"] == "denied"
 
 
-def test_customer_token_is_not_a_hub_api_credential(client: Client) -> None:
-    """Today's boundary: a portal token is refused by hub-api until slice 02 mounts its routes.
+def test_customer_token_for_an_unknown_customer_is_refused(client: Client) -> None:
+    """A portal token names a `hub.customers` row, and a row that is gone signs nobody in.
 
-    `getMe` is the one operation whose contract allows a customer, but `BearerJwtAuthentication`
-    resolves a token through `hub.users` and a customer is not one. Pinning the refusal keeps
-    the gap visible: when the portal lands, this test fails and the customer rows join the
-    matrix above rather than the token silently being accepted by staff endpoints.
+    Since slice 02's registry the portal's principal is real (task 02.5), so the check moved
+    from "a customer is not a `hub.users` row" to "this customer still exists and is active".
+    The id here is random, which is the case a closed or deleted account leaves behind: the
+    session is not trusted to outlive the account it names. A live customer's reach is pinned
+    in `tests/integration/customers/test_scope_and_masking.py`.
     """
     customer_id = uuid.uuid4()
     token = wiring.tokens().issue(

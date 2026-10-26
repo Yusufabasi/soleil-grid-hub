@@ -34,6 +34,7 @@ from hub.customers.domain.errors import (
     InvalidStateTransition,
     RegistryNotFound,
 )
+from hub.customers.domain.masking import pseudonym
 from hub.customers.domain.phone import normalise_e164
 from hub.identity.contracts import AuditLog, Principal
 from hub.shared.contracts import UnitOfWork
@@ -41,6 +42,9 @@ from hub.shared.errors import Conflict, ValidationFailed
 from hub.shared.ports import Clock
 
 __all__ = [
+    "FULL",
+    "MASKED",
+    "PSEUDONYMOUS",
     "CloseCustomer",
     "CustomerQuery",
     "CustomerService",
@@ -48,10 +52,22 @@ __all__ = [
     "ListCustomers",
     "RegisterCustomer",
     "UpdateCustomer",
+    "customer_projection",
+    "customer_pseudonym",
     "customer_view",
 ]
 
 UnitOfWorkFactory = Callable[[Principal | None], UnitOfWork]
+
+# The three documents a customer can be read as. The projection follows the caller's role, and
+# the view builds the document from it; it is never a query parameter (D-14).
+FULL = "full"
+MASKED = "masked"
+PSEUDONYMOUS = "pseudonymous"
+
+
+# Roles that read a customer row for what it is, rather than for what it operates.
+_IDENTITY_READERS = frozenset({"support_agent", "finance_officer"})
 
 # A customer may be suspended and reactivated; it may not leave `closed` except to `erased`,
 # which slice 16's approved process owns.
@@ -107,6 +123,9 @@ class CustomerQuery:
     site_id: UUID | None = None
     plan_id: UUID | None = None
     phone_e164: str | None = None
+    q: str | None = None
+    created_after: datetime | None = None
+    created_before: datetime | None = None
     after_id: UUID | None = None
     limit: int = 25
 
@@ -135,9 +154,31 @@ class CustomerStore(Protocol):
         site_id: UUID | None = None,
         plan_id: UUID | None = None,
         phone_e164: str | None = None,
+        q: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
         after_id: UUID | None = None,
         limit: int = 25,
     ) -> list[CustomerRow]: ...
+
+
+def customer_projection(principal: Principal) -> str:
+    """Which document this caller gets: full, masked or pseudonymous (D-14).
+
+    A portal token reads its own row, and the scope check decides whether it has one. A staff
+    caller who reads customers at all as a support agent or a finance officer sees the masked
+    number unless the role or the person holds ``customer.read_pii``; operations engineers see
+    the pseudonymous row and nothing else. Any other customer-facing credential (an integrator
+    key) gets the masked row, the least it could need.
+    """
+    if principal.kind == "customer":
+        return FULL
+    if principal.roles & _IDENTITY_READERS:
+        holds_pii = "customer.read_pii" in principal.permissions
+        return FULL if "finance_officer" in principal.roles or holds_pii else MASKED
+    if "operations_engineer" in principal.roles:
+        return PSEUDONYMOUS
+    return MASKED
 
 
 def customer_view(row: CustomerRow) -> CustomerView:
@@ -169,6 +210,7 @@ class CustomerService:
         audit: AuditLog,
         unit_of_work: UnitOfWorkFactory,
         default_phone_prefix: str = "+243",
+        pseudonym_key: str = "dev-pseudonym-key-not-a-secret",
     ) -> None:
         self._clock = clock
         self._ids = ids
@@ -179,18 +221,39 @@ class CustomerService:
         self._audit = audit
         self._unit_of_work = unit_of_work
         self._default_prefix = default_phone_prefix
+        self._pseudonym_key = pseudonym_key
 
     # --- scope ---------------------------------------------------------------------------
     def _scope(self, principal: Principal) -> list[UUID] | None:
         return None if principal.all_sites else sorted(principal.site_ids)
 
     def _visible(self, principal: Principal, customer_id: UUID) -> CustomerRow:
-        """The row, or 404 — a customer outside the caller's sites does not exist for them."""
+        """The row, or 404 — a customer outside the caller's sites does not exist for them.
+
+        A portal token may only name itself: the claim is the scope, not the id in the URL. A
+        staff read outside `user_sites` is refused *and recorded*, because the refusal is the
+        signal an auditor looks for (S-8) even though the client only sees "not found".
+        """
         row = self._customers.get(customer_id)
         if row is None:
             raise RegistryNotFound()
+        if principal.kind == "customer":
+            if principal.customer_id != row.id and principal.subject_id != row.id:
+                raise RegistryNotFound()
+            return row
         scope = self._scope(principal)
         if scope is not None and row.site_id not in set(scope):
+            self._audit.record(
+                stream="registry",
+                actor=principal,
+                action="registry.customer.denied",
+                entity_type="customer",
+                entity_id=row.id,
+                site_id=row.site_id,
+                details={"reason": "site_scope"},
+                outcome="denied",
+                subject_customer_id=row.id,
+            )
             raise RegistryNotFound()
         return row
 
@@ -365,12 +428,32 @@ class CustomerService:
         self, principal: Principal, command: ListCustomers
     ) -> tuple[Sequence[CustomerRow], UUID | None]:
         query = command.query
+        if customer_projection(principal) == PSEUDONYMOUS and (query.q or query.phone_e164):
+            # Searching by a name or a number is searching the identity this caller may not
+            # see; refusing says so instead of answering an empty page that looks like "no such
+            # customer" (D-14).
+            field = "/q" if query.q else "/phone_e164"
+            raise ValidationFailed(
+                details={
+                    "errors": [
+                        {
+                            "field": field,
+                            "code": "not_allowed",
+                            "message": "This caller reads customers pseudonymously; "
+                            "name and phone filters are not available.",
+                        }
+                    ]
+                }
+            )
         rows = self._customers.list_scoped(
             site_ids=self._scope(principal),
             statuses=query.statuses,
             site_id=query.site_id,
             plan_id=query.plan_id,
             phone_e164=query.phone_e164,
+            q=query.q,
+            created_after=query.created_after,
+            created_before=query.created_before,
             after_id=query.after_id,
             limit=query.limit + 1,
         )
@@ -378,10 +461,43 @@ class CustomerService:
         next_cursor = page[-1].id if len(rows) > query.limit else None
         return page, next_cursor
 
+    def pseudonym_for(self, row: CustomerRow) -> str:
+        """The stable pseudonym operations engineers see, computed and never written."""
+        return customer_pseudonym(row, key=self._pseudonym_key)
+
+    def record_reveal(self, principal: Principal, customers: Sequence[CustomerRow]) -> None:
+        """Record a read that returned an unmasked number; the masked read is routine.
+
+        One row per customer rather than one per request: the trail has to answer "who looked at
+        this person" from either direction, and a count would not. A portal reading itself is
+        not a reveal and is never recorded here.
+        """
+        if not customers or principal.kind != "staff":
+            return
+        if customer_projection(principal) != FULL:
+            return
+        with self._unit_of_work(principal):
+            for customer in customers:
+                self._audit.record(
+                    stream="registry",
+                    actor=principal,
+                    action="registry.customer.revealed",
+                    entity_type="customer",
+                    entity_id=customer.id,
+                    site_id=customer.site_id,
+                    details={"fields": ["full_name", "phone_e164", "email"]},
+                    subject_customer_id=customer.id,
+                )
+
 
 def _locale(value: str) -> str:
     """Only ``en`` and ``fr`` are stored (``ck_customers_language``); anything else is ``en``."""
     return "fr" if value == "fr" else "en"
+
+
+def customer_pseudonym(row: CustomerRow, *, key: str) -> str:
+    """The stored pseudonym when erasure wrote one, otherwise the keyed digest of the id."""
+    return row.pseudonym or pseudonym(row.id, key)
 
 
 def _customer_event(

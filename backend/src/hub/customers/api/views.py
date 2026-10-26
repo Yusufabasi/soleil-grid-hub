@@ -8,8 +8,11 @@ behind a tariff, the audit row) live in ``customers.application``. The permissio
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from datetime import datetime
 from typing import Any
 
+from django.utils.dateparse import parse_datetime
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -27,18 +30,23 @@ from hub.customers.api.serializers import (
     decode_cursor,
     decode_tariff_cursor,
     encode_cursor,
+    masked_customer_document,
     plan_document,
+    pseudonymous_document,
     site_document,
     tariff_document,
     tariff_page_meta,
 )
 from hub.customers.application.customers import (
+    MASKED,
+    PSEUDONYMOUS,
     CloseCustomer,
     CustomerQuery,
     GetCustomer,
     ListCustomers,
     RegisterCustomer,
     UpdateCustomer,
+    customer_projection,
 )
 from hub.customers.application.sites_plans import (
     CreatePlan,
@@ -53,6 +61,7 @@ from hub.customers.application.sites_plans import (
     UpdateSite,
 )
 from hub.customers.application.tariffs import ListTariffs, ProposeTariff
+from hub.customers.contracts import CustomerRow
 from hub.identity.contracts import Principal
 from hub.shared.api.concurrency import etag_for, require_if_match
 from hub.shared.api.permissions import PermissionsYamlPermission, operation
@@ -88,6 +97,36 @@ def _limit(request: Request) -> int:
 
 def _meter_counts() -> dict[Any, int]:
     return wiring.meter_counter().per_site()
+
+
+def _instant(raw: str | None) -> datetime | None:
+    """An RFC 3339 query instant, or ``invalid_request`` rather than a silently ignored one."""
+    if not raw:
+        return None
+    parsed = parse_datetime(raw)
+    if parsed is None:
+        raise InvalidRequest()
+    return parsed
+
+
+def _customer_document(principal: Principal, row: CustomerRow) -> dict[str, Any]:
+    """The document this caller is allowed to see of ``row``, chosen from its roles (D-14).
+
+    Never from a query parameter: a support agent cannot ask for the unmasked view, and an
+    operations engineer cannot ask for the named one. A write answers with what was written
+    (the caller typed it); these reads are the ones the projection governs.
+    """
+    projection = customer_projection(principal)
+    if projection == PSEUDONYMOUS:
+        return pseudonymous_document(row, pseudonym=wiring.customer_service().pseudonym_for(row))
+    if projection == MASKED:
+        return masked_customer_document(row)
+    return customer_document(row)
+
+
+def _record_reveal(principal: Principal, rows: Sequence[CustomerRow]) -> None:
+    """Audit the reads that returned an unmasked number; the masked ones are routine."""
+    wiring.customer_service().record_reveal(principal, rows)
 
 
 class SiteCollectionView(APIView):
@@ -287,10 +326,6 @@ class PlanTariffCollectionView(APIView):
         return response
 
 
-def _customer_rows_to_document(rows: Any) -> list[dict[str, Any]]:
-    return [customer_document(row) for row in rows]
-
-
 class CustomerCollectionView(APIView):
     """`listCustomers` and `createCustomer` (support; finance and operations read)."""
 
@@ -308,13 +343,17 @@ class CustomerCollectionView(APIView):
             site_id=_uuid_param(params.get("site_id")),
             plan_id=_uuid_param(params.get("plan_id")),
             phone_e164=params.get("phone_e164"),
+            q=params.get("q"),
+            created_after=_instant(params.get("created_after")),
+            created_before=_instant(params.get("created_before")),
             after_id=decode_cursor(params.get("cursor")),
             limit=_limit(request),
         )
         page, next_cursor = wiring.customer_service().list(principal, ListCustomers(query=query))
+        _record_reveal(principal, page)
         return Response(
             {
-                "data": _customer_rows_to_document(page),
+                "data": [_customer_document(principal, row) for row in page],
                 "meta": {
                     "has_next": next_cursor is not None,
                     "next_cursor": encode_cursor(next_cursor),
@@ -354,7 +393,8 @@ class CustomerDetailView(APIView):
     def get(self, request: Request, customer_id: Any) -> Response:
         principal = _principal(request)
         row = wiring.customer_service().get(principal, GetCustomer(customer_id=customer_id))
-        response = Response({"data": customer_document(row)})
+        _record_reveal(principal, [row])
+        response = Response({"data": _customer_document(principal, row)})
         response["ETag"] = etag_for(row.version)
         return response
 

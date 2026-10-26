@@ -277,5 +277,6 @@ def customer_service() -> CustomerService:
                     audit=audit_log(),
                     unit_of_work=unit_of_work,
                     default_phone_prefix=str(settings.HUB_DEFAULT_PHONE_PREFIX),
+                    pseudonym_key=str(settings.HUB_PSEUDONYM_KEY),
                 )
     return _customer_service

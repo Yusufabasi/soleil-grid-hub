@@ -366,7 +366,11 @@ class UserRepository:
 
         The token proves *who*; this method decides whether that identity is still current
         and what it may do. Suspension and deletion are checked here, never in the token.
+        A customer token names a ``hub.customers`` row instead of a staff account, so the two
+        kinds take different paths — the portal's caller has no roles beyond its kind.
         """
+        if claims.kind == "customer":
+            return self._customer_principal(claims)
         record = self.get(claims.subject_id)
         if record is None or record.status != "active":
             raise Unauthenticated(code="token_revoked")
@@ -386,6 +390,30 @@ class UserRepository:
             customer_id=None,
             session_id=claims.session_id,
             token_version=record.token_version,
+            auth_time=claims.auth_time,
+            acr=claims.acr,
+            locale=cast("Locale", record.locale),
+        )
+
+    @staticmethod
+    def _customer_principal(claims: TokenClaims) -> Principal:
+        """The portal's caller: its own row, and nothing beyond it.
+
+        The lookup goes through the directory the one-time-code login already uses, which
+        answers only for an ``active`` customer — a closed account loses its reads with its
+        sign-in, and the token's ``sub`` *is* the customer id (there is no user row to check a
+        token version against, so closing the account is what revokes its access).
+        """
+        from hub.identity.infrastructure.customer_otp import CustomerDirectory  # noqa: PLC0415
+
+        record = CustomerDirectory().by_id(claims.subject_id)
+        if record is None:
+            raise Unauthenticated(code="token_revoked")
+        return Principal(
+            subject_id=record.id,
+            kind="customer",
+            customer_id=record.id,
+            session_id=claims.session_id,
             auth_time=claims.auth_time,
             acr=claims.acr,
             locale=cast("Locale", record.locale),

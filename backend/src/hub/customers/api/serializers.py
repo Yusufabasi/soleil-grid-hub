@@ -18,6 +18,7 @@ from uuid import UUID
 from rest_framework import serializers
 
 from hub.customers.contracts import CustomerRow, PlanRow, PlanTariffRow, SiteRow
+from hub.customers.domain.masking import mask_phone
 from hub.shared.errors import InvalidCursor
 
 __all__ = [
@@ -33,8 +34,10 @@ __all__ = [
     "decode_tariff_cursor",
     "encode_cursor",
     "encode_tariff_cursor",
+    "masked_customer_document",
     "money",
     "plan_document",
+    "pseudonymous_document",
     "site_document",
     "tariff_document",
     "tariff_page_meta",
@@ -144,6 +147,33 @@ def customer_document(row: CustomerRow) -> dict[str, Any]:
         "created_at": row.created_at.isoformat().replace("+00:00", "Z"),
         "updated_at": row.updated_at.isoformat().replace("+00:00", "Z"),
         "version": row.version,
+    }
+
+
+def masked_customer_document(row: CustomerRow) -> dict[str, Any]:
+    """``Customer`` as a support agent without ``customer.read_pii`` sees it.
+
+    Everything but the number is the real document — a support agent needs the name, the site
+    and the plan to answer a question; the mask is only about dialling the person.
+    """
+    document = customer_document(row)
+    document["phone_e164"] = mask_phone(row.phone_e164)
+    return document
+
+
+def pseudonymous_document(row: CustomerRow, *, pseudonym: str) -> dict[str, Any]:
+    """``CustomerPseudonymous``: exactly its six keys, and nothing that names the person.
+
+    Built as a separate document rather than by deleting keys: a field added to ``Customer``
+    later would otherwise leak into this view by default, and this caller must never see it.
+    """
+    return {
+        "id": str(row.id),
+        "pseudonym": pseudonym,
+        "site_id": str(row.site_id),
+        "plan_id": str(row.plan_id),
+        "status": row.status,
+        "created_at": row.created_at.isoformat().replace("+00:00", "Z"),
     }
 
 

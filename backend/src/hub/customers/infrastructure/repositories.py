@@ -455,13 +455,18 @@ class CustomerRepository:
         site_id: UUID | None = None,
         plan_id: UUID | None = None,
         phone_e164: str | None = None,
+        q: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
         after_id: UUID | None = None,
         limit: int = 25,
     ) -> list[CustomerRow]:
         """One page, newest id first by keyset, within the caller's sites.
 
         ``site_ids is None`` means every site (an ``all_sites`` principal); a list that is
-        empty can never widen access, it matches nothing.
+        empty can never widen access, it matches nothing. ``q`` is a prefix match on the name
+        and the external reference plus a containment match on the digits of the number, which
+        is what a support agent types when the caller reads out half a phone number.
         """
         filters = ["deleted_at IS NULL"]
         params: list[Any] = []
@@ -477,6 +482,21 @@ class CustomerRepository:
         if phone_e164 is not None:
             filters.append("phone_e164 = %s")
             params.append(phone_e164)
+        if q:
+            prefix = f"{q.strip()}%"
+            digits = "".join(character for character in q if character.isdigit())
+            pattern = "(full_name ILIKE %s OR external_ref ILIKE %s"
+            params.extend([prefix, prefix])
+            if digits:
+                pattern += " OR phone_e164 LIKE %s"
+                params.append(f"%{digits}%")
+            filters.append(f"{pattern})")
+        if created_after is not None:
+            filters.append("created_at >= %s")
+            params.append(created_after)
+        if created_before is not None:
+            filters.append("created_at < %s")
+            params.append(created_before)
         if statuses:
             filters.append("status = ANY(%s)")
             params.append(list(statuses))
