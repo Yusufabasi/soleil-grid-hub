@@ -13,17 +13,20 @@ from __future__ import annotations
 
 import threading
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from django.conf import settings
 
 from hub.customers.application.customers import CustomerService
 from hub.customers.application.sites_plans import PlanService, SiteService
-from hub.customers.contracts import MeterCounter, WalletBalanceProbe
+from hub.customers.application.tariffs import TariffChangeExecutor, TariffService
+from hub.customers.contracts import MeterCounter, ProposalReceipt, WalletBalanceProbe
 from hub.customers.infrastructure.repositories import (
     CustomerRepository,
     PlanRepository,
     SiteRepository,
+    TariffRepository,
 )
 from hub.identity import wiring as identity_wiring
 from hub.identity.contracts import AuditLog, Principal
@@ -42,8 +45,10 @@ __all__ = [
     "ids",
     "meter_counter",
     "plans",
+    "register_approval_executors",
     "reset",
     "sites",
+    "tariffs",
     "unit_of_work",
     "use_meter_counter",
 ]
@@ -61,6 +66,7 @@ _clock: Clock | None = None
 _ids: Uuid7Generator | None = None
 _sites: SiteService | None = None
 _plans: PlanService | None = None
+_tariffs: TariffService | None = None
 _audit: AuditLog | None = None
 _customers: CustomerRepository | None = None
 _customer_service: CustomerService | None = None
@@ -81,11 +87,17 @@ _counter: MeterCounter = _NoMeters()
 
 
 def reset() -> None:
-    """Drop every cached service; tests call it after changing a setting."""
-    global _clock, _ids, _sites, _plans, _audit, _customers, _customer_service  # noqa: PLW0603
+    """Drop every cached service; tests call it after changing a setting.
+
+    The tariff executor is not dropped with them: it is registered as a *contribution* on
+    `identity`'s registry, which keeps contributions across its own resets (composition, not
+    cache). An approval kind with no executor is refused, so losing it would look like a
+    permission bug rather than the missing registration it is.
+    """
+    global _clock, _ids, _sites, _plans, _tariffs, _audit, _customers, _customer_service  # noqa: PLW0603
     global _probe  # noqa: PLW0603
     with _lock:
-        _clock = _ids = _sites = _plans = _audit = _customers = None
+        _clock = _ids = _sites = _plans = _tariffs = _audit = _customers = None
         _customer_service = None
         _probe = _NoWallet()
 
@@ -170,6 +182,59 @@ def plans() -> PlanService:
                     unit_of_work=unit_of_work,
                 )
     return _plans
+
+
+class _IdentityApprovals:
+    """The propose half of `identity`'s maker-checker, adapted to this module's port.
+
+    Only ``propose`` crosses the boundary: a tariff is decided through `/approvals`, where the
+    executor registered below runs, so the customers module never holds an approval row.
+    """
+
+    def propose(
+        self,
+        principal: Principal,
+        *,
+        kind: str,
+        payload: Any,
+        reason: str,
+    ) -> ProposalReceipt:
+        approval = identity_wiring.approvals().propose(
+            principal, kind=kind, payload=payload, reason=reason
+        )
+        return ProposalReceipt(id=approval.id, document=approval.document())
+
+
+def tariffs() -> TariffService:
+    """``listPlanTariffs`` and ``createPlanTariff``, on the shared plan repository."""
+    global _tariffs  # noqa: PLW0603
+    if _tariffs is None:
+        with _lock:
+            if _tariffs is None:
+                _tariffs = TariffService(
+                    clock=clock(),
+                    plans=PlanRepository(),
+                    tariffs=TariffRepository(),
+                    approvals=_IdentityApprovals(),
+                )
+    return _tariffs
+
+
+def register_approval_executors() -> None:
+    """Publish ``tariff.change`` to `identity`'s registry, once per process.
+
+    ``add_approval_executor`` stores it as a contribution, so a registry `identity` rebuilds
+    later (its wiring resets in tests) still knows the kind; the executor itself is stateless
+    apart from the clock, which is read through the kernel seam on every call.
+    """
+    identity_wiring.add_approval_executor(
+        TariffChangeExecutor.kind,
+        required_permission=TariffChangeExecutor.required_permission,
+        required_attribute=TariffChangeExecutor.required_attribute,
+        execute=TariffChangeExecutor(
+            clock=clock(), ids=ids(), tariffs=TariffRepository(), audit=audit_log()
+        ),
+    )
 
 
 class _NoWallet:

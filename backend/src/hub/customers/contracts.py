@@ -8,13 +8,14 @@ a ``CustomerRow`` is the whole stored row, version included, and it never leaves
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import UUID
 
 __all__ = [
+    "ApprovalProposer",
     "CustomerDirectory",
     "CustomerRow",
     "CustomerView",
@@ -23,9 +24,11 @@ __all__ = [
     "PlanStore",
     "PlanTariffRow",
     "PlanView",
+    "ProposalReceipt",
     "SiteRow",
     "SiteStore",
     "SiteView",
+    "TariffStore",
     "WalletBalanceProbe",
 ]
 
@@ -190,7 +193,7 @@ class SiteStore(Protocol):
 
 
 class PlanStore(Protocol):
-    """Persistence of ``hub.plans`` and the tariff lookups the plan document needs."""
+    """Persistence of ``hub.plans`` and the tariff lookup the plan document needs."""
 
     def add(self, plan: PlanRow) -> None: ...
 
@@ -202,7 +205,65 @@ class PlanStore(Protocol):
 
     def current_tariff(self, plan_id: UUID, *, at: datetime) -> PlanTariffRow | None: ...
 
-    def list_tariffs(self, plan_id: UUID) -> list[PlanTariffRow]: ...
+
+class TariffStore(Protocol):
+    """Persistence of the immutable price versions of ``hub.plan_tariffs`` (D-08).
+
+    ``add`` is where the database's two guards live: the unique ``(plan_id, effective_from)``
+    and the trigger that refuses a revision beyond the per-revision cap. Both arrive as
+    ``IntegrityError`` and leave the adapter as a domain conflict, never as a 500.
+    """
+
+    def add(self, tariff: PlanTariffRow) -> None: ...
+
+    def previous(self, plan_id: UUID, *, before: datetime) -> PlanTariffRow | None:
+        """The version in force just before ``before``: what the cap is measured against."""
+        ...
+
+    def supersede_before(self, plan_id: UUID, *, before: datetime) -> int:
+        """Retire every active version whose date is earlier; returns how many moved."""
+        ...
+
+    def page(
+        self, plan_id: UUID, *, after: tuple[datetime, UUID] | None, limit: int
+    ) -> list[PlanTariffRow]:
+        """One keyset page of the history, newest ``effective_from`` first."""
+        ...
+
+    def has_pending_proposal(
+        self, plan_id: UUID, *, effective_from: datetime, at: datetime
+    ) -> bool:
+        """True when a live proposal for that plan and instant already waits for a decision.
+
+        ``at`` is the caller's clock: an approval past its expiry can no longer be decided, so
+        it must not hold the date hostage.
+        """
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class ProposalReceipt:
+    """A stored proposal: its id, and the document ``POST .../tariffs`` answers with."""
+
+    id: UUID
+    document: Mapping[str, Any]
+
+
+class ApprovalProposer(Protocol):
+    """The maker-checker entry point as this module needs it; `identity` owns the rows.
+
+    The adapter is bound in ``customers.wiring``, so this package never imports
+    ``identity.application`` — only the "propose" half of the service crosses the boundary.
+    """
+
+    def propose(
+        self,
+        principal: Any,
+        *,
+        kind: str,
+        payload: Mapping[str, Any],
+        reason: str,
+    ) -> ProposalReceipt: ...
 
 
 class MeterCounter(Protocol):

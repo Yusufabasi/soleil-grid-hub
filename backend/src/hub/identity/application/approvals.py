@@ -90,14 +90,25 @@ DB_TO_API_STATUS = {
 
 
 class Executor(Protocol):
-    """What one kind of approval does when it is approved."""
+    """What one kind of approval does when it is approved.
+
+    ``approval_id`` is the row being decided: an executor that records what authorised its
+    write (``plan_tariffs.approval_id``, a ledger posting's reference) needs the id, and
+    deriving it from "the approval this transaction just marked approved" would be a guess
+    dressed up as a query.
+    """
 
     kind: str
     required_permission: str
     required_attribute: str | None
 
     def execute(
-        self, payload: Mapping[str, Any], principal: Principal, uow: UnitOfWork
+        self,
+        payload: Mapping[str, Any],
+        principal: Principal,
+        uow: UnitOfWork,
+        *,
+        approval_id: UUID,
     ) -> Mapping[str, Any] | None: ...
 
 
@@ -108,7 +119,7 @@ class RegisteredExecutor:
     kind: str
     required_permission: str
     required_attribute: str | None
-    execute: Callable[[Mapping[str, Any], Principal, UnitOfWork], Mapping[str, Any] | None]
+    execute: Callable[..., Mapping[str, Any] | None]
 
     def may_propose(self, principal: Principal) -> bool:
         """Proposing needs the permission; the attribute gates deciding, not asking."""
@@ -133,7 +144,7 @@ class ExecutorRegistry:
         *,
         required_permission: str,
         required_attribute: str | None,
-        execute: Callable[[Mapping[str, Any], Principal, UnitOfWork], Mapping[str, Any] | None],
+        execute: Callable[..., Mapping[str, Any] | None],
     ) -> None:
         if kind not in KIND_TO_ACTION:
             raise ValueError(f"kind {kind!r} has no database action yet")
@@ -349,7 +360,7 @@ class ApprovalService:
                 approver_session_id=self._session_of(principal),
                 decided_at=decided_at,
             )
-            result = executor.execute(row["payload"], principal, uow)
+            result = executor.execute(row["payload"], principal, uow, approval_id=approval_id)
             self._repository.mark_consumed(approval_id, at=decided_at)
             executed = self._repository.get(approval_id)
             if executed is None:  # pragma: no cover - locked in this transaction

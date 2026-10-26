@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -27,12 +28,16 @@ __all__ = [
     "PlanUpdateInput",
     "SiteCreateInput",
     "SiteUpdateInput",
+    "TariffCreateInput",
     "decode_cursor",
+    "decode_tariff_cursor",
     "encode_cursor",
+    "encode_tariff_cursor",
     "money",
     "plan_document",
     "site_document",
     "tariff_document",
+    "tariff_page_meta",
 ]
 
 CURRENCIES = ("USD", "CDF")
@@ -86,6 +91,19 @@ class PlanUpdateInput(serializers.Serializer[dict[str, Any]]):
     min_top_up = MoneyInput(required=False)
     max_top_up = MoneyInput(required=False)
     status = serializers.ChoiceField(choices=("draft", "active", "retired"), required=False)
+
+
+class TariffCreateInput(serializers.Serializer[dict[str, Any]]):
+    """``TariffCreate``: the price in the plan's currency and the date it starts.
+
+    ``daily_fixed_fee`` has no column yet (Plan notes 3): it is validated here and carried in
+    the approval payload, so the decision records the whole price the maker proposed.
+    """
+
+    price_per_kwh = MoneyInput()
+    daily_fixed_fee = MoneyInput(required=False)
+    effective_from = serializers.DateTimeField()
+    reason = serializers.CharField(min_length=1, max_length=500)
 
 
 class CustomerCreateInput(serializers.Serializer[dict[str, Any]]):
@@ -200,3 +218,32 @@ def decode_cursor(cursor: str | None) -> UUID | None:
         return UUID(str(payload["i"]))
     except (binascii.Error, ValueError, KeyError, TypeError) as exc:
         raise InvalidCursor() from exc
+
+
+def encode_tariff_cursor(tariff: PlanTariffRow) -> str:
+    """The keyset of the tariff history: ``(effective_from, id)``, the order it is read in."""
+    raw = json.dumps(
+        {"t": tariff.effective_from.isoformat(), "i": str(tariff.id)}, separators=(",", ":")
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def decode_tariff_cursor(cursor: str | None) -> tuple[datetime, UUID] | None:
+    """That keyset back; anything else is ``invalid_cursor`` (400)."""
+    if not cursor:
+        return None
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded))
+        return datetime.fromisoformat(str(payload["t"])), UUID(str(payload["i"]))
+    except (binascii.Error, ValueError, KeyError, TypeError) as exc:
+        raise InvalidCursor() from exc
+
+
+def tariff_page_meta(limit: int, *, has_next: bool, last: PlanTariffRow | None) -> dict[str, Any]:
+    """``PageMeta`` of the history: an opaque cursor only when there is another page."""
+    return {
+        "has_next": has_next,
+        "next_cursor": encode_tariff_cursor(last) if has_next and last is not None else None,
+        "limit": limit,
+    }

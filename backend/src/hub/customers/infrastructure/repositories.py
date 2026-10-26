@@ -30,10 +30,17 @@ from hub.customers.contracts import (
     PlanTariffRow,
     SiteRow,
 )
-from hub.customers.domain.errors import DuplicatePhone, VersionConflict
+from hub.customers.domain.errors import (
+    DuplicatePhone,
+    TariffChangeTooLarge,
+    VersionConflict,
+)
 from hub.shared.errors import Duplicate
 
-__all__ = ["CustomerRepository", "PlanRepository", "SiteRepository"]
+__all__ = ["CustomerRepository", "PlanRepository", "SiteRepository", "TariffRepository"]
+
+# The trigger's own code, embedded in the ``RAISE EXCEPTION`` message (db/schema.sql 3b).
+TARIFF_CAP_CODE = "tariff_change_too_large"
 
 _SITE_COLUMNS = "id, code, name, country_code, currency, timezone, status, created_at, updated_at"
 _PLAN_COLUMNS = (
@@ -264,14 +271,107 @@ class PlanRepository:
             row = cursor.fetchone()
         return _tariff(row) if row is not None else None
 
-    def list_tariffs(self, plan_id: UUID) -> list[PlanTariffRow]:
+
+class TariffRepository:
+    """Reads and writes of ``hub.plan_tariffs``, the immutable price versions (D-08).
+
+    Two database guards live behind ``add``: the trigger that caps a revision at 25 percent
+    and the unique ``(plan_id, effective_from)``. Both arrive as an ``IntegrityError`` and
+    leave as the conflict code a client branches on.
+    """
+
+    def add(self, tariff: PlanTariffRow) -> None:
+        """Insert a price version; the database's two guards become domain conflicts.
+
+        ``trg_plan_tariffs_guard`` raises ``check_violation`` with the code in the message
+        (a ``RAISE`` carries no constraint name), and ``uq_plan_tariffs_effective`` refuses a
+        second row for the same date. A proposal that lost either race reports the code the
+        client branches on instead of a 500.
+        """
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO hub.plan_tariffs (id, plan_id, tariff_minor_per_kwh, "
+                    "effective_from, status, proposed_by, approval_id, created_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                    [
+                        tariff.id,
+                        tariff.plan_id,
+                        tariff.tariff_minor_per_kwh,
+                        tariff.effective_from,
+                        tariff.status,
+                        tariff.proposed_by,
+                        tariff.approval_id,
+                        tariff.created_at,
+                    ],
+                )
+        except IntegrityError as exc:
+            if _constraint(exc) == "uq_plan_tariffs_effective":
+                raise Duplicate() from exc
+            if TARIFF_CAP_CODE in str(exc.__cause__):
+                raise TariffChangeTooLarge() from exc
+            raise
+
+    def previous(self, plan_id: UUID, *, before: datetime) -> PlanTariffRow | None:
+        """The latest version dated before ``before`` — exactly what the trigger compares."""
         with connection.cursor() as cursor:
             cursor.execute(
                 f"SELECT {_TARIFF_COLUMNS} FROM hub.plan_tariffs "  # noqa: S608
-                "WHERE plan_id = %s ORDER BY effective_from DESC",
-                [plan_id],
+                "WHERE plan_id = %s AND effective_from < %s "
+                "ORDER BY effective_from DESC LIMIT 1",
+                [plan_id, before],
             )
+            row = cursor.fetchone()
+        return _tariff(row) if row is not None else None
+
+    def supersede_before(self, plan_id: UUID, *, before: datetime) -> int:
+        """Retire the prices this one replaces; a later-dated row is left for its own turn."""
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "UPDATE hub.plan_tariffs SET status = 'superseded' "
+                "WHERE plan_id = %s AND status = 'active' AND effective_from < %s",
+                [plan_id, before],
+            )
+            return int(cursor.rowcount)
+
+    def page(
+        self, plan_id: UUID, *, after: tuple[datetime, UUID] | None, limit: int
+    ) -> list[PlanTariffRow]:
+        """One keyset page ordered by ``(effective_from, id)`` descending."""
+        conditions = ["plan_id = %s"]
+        params: list[Any] = [plan_id]
+        if after is not None:
+            conditions.append("(effective_from, id) < (%s, %s)")
+            params.extend([after[0], after[1]])
+        params.append(limit)
+        statement = (
+            f"SELECT {_TARIFF_COLUMNS} FROM hub.plan_tariffs "  # noqa: S608 - literal columns
+            f"WHERE {' AND '.join(conditions)} ORDER BY effective_from DESC, id DESC LIMIT %s"
+        )
+        with connection.cursor() as cursor:
+            cursor.execute(statement, params)
             return [_tariff(row) for row in cursor.fetchall()]
+
+    def has_pending_proposal(
+        self, plan_id: UUID, *, effective_from: datetime, at: datetime
+    ) -> bool:
+        """Is a live proposal for this plan and date waiting for a second pair of hands?
+
+        This is the one read of ``hub.approvals`` outside `identity`, and it is read-only: a
+        proposal has no row in ``plan_tariffs`` yet (it is inserted when it is approved), so the
+        unique ``(plan_id, effective_from)`` cannot answer this question before the decision.
+        Adding the check here keeps the answer honest without teaching `identity` about tariffs.
+        An approval past ``at`` is excluded: it can no longer be decided, so it must not hold a
+        date hostage for the rest of the deployment's life.
+        """
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT 1 FROM hub.approvals WHERE action = 'tariff.change' "
+                "AND status = 'pending' AND expires_at > %s AND payload->>'plan_id' = %s "
+                "AND (payload->>'effective_from')::timestamptz = %s LIMIT 1",
+                [at, str(plan_id), effective_from],
+            )
+            return cursor.fetchone() is not None
 
 
 class CustomerRepository:

@@ -291,11 +291,6 @@ class PlanService:
         self.get(principal, GetPlan(plan_id=plan_id))
         return self._plans.current_tariff(plan_id, at=self._clock.now())
 
-    def tariffs(self, principal: Principal, plan_id: UUID) -> Sequence[PlanTariffRow]:
-        """Every version of the plan's price, newest first (the history is never rewritten)."""
-        self.get(principal, GetPlan(plan_id=plan_id))
-        return self._plans.list_tariffs(plan_id)
-
     def create(self, principal: Principal, command: CreatePlan) -> PlanRow:
         plan_input = command.plan
         _validate_plan_amounts(plan_input.min_topup_minor, plan_input.max_topup_minor)

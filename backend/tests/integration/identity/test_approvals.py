@@ -41,9 +41,15 @@ class FakeExecutor:
     required_attribute: str | None = None
     fail: bool = False
     calls: list[dict[str, Any]] = field(default_factory=list)
+    approved: list[UUID] = field(default_factory=list)
 
-    def execute(self, payload: Any, principal: Any, uow: Any) -> dict[str, Any] | None:
+    def execute(
+        self, payload: Any, principal: Any, uow: Any, *, approval_id: UUID
+    ) -> dict[str, Any] | None:
         self.calls.append(dict(payload))
+        # What authorised the write: an executor that stores it (a tariff version) reads it
+        # from here rather than guessing which approval this transaction just decided.
+        self.approved.append(approval_id)
         if self.fail:
             raise RuntimeError("executor exploded")
         return {"applied": True}
@@ -271,7 +277,7 @@ def test_approver_without_required_permission_or_attribute_403(
         "manual_adjustment",
         required_permission="ledger.adjust",
         required_attribute="finance_lead",
-        execute=lambda payload, principal, uow: None,
+        execute=lambda payload, principal, uow, *, approval_id: None,
     )
     maker = seed_local_user("finance_officer")
     created = propose(
@@ -302,7 +308,7 @@ def test_list_shows_only_kinds_caller_may_decide(
         "manual_adjustment",
         required_permission="ledger.adjust",
         required_attribute=None,
-        execute=lambda payload, principal, uow: None,
+        execute=lambda payload, principal, uow, *, approval_id: None,
     )
     admin = seed_local_user("administrator")
     finance = seed_local_user("finance_officer")

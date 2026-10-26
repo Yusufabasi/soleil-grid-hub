@@ -1,9 +1,9 @@
-"""`/sites` and `/plans`: the registry's two non-money resources (FR-01).
+"""`/sites`, `/plans` and `/plans/{id}/tariffs`: the registry's non-money resources (FR-01).
 
 Each handler is thin — validate, call one use case, shape one document — because the rules
-that matter (site scope, plan locking, the currency of an amount, the audit row) live in
-``customers.application.sites_plans``. The permission class reads ``api/permissions.yaml``;
-this module never checks a role itself.
+that matter (site scope, plan locking, the currency of an amount, the maker-checker decision
+behind a tariff, the audit row) live in ``customers.application``. The permission class reads
+``api/permissions.yaml``; this module never checks a role itself.
 """
 
 from __future__ import annotations
@@ -22,11 +22,15 @@ from hub.customers.api.serializers import (
     PlanUpdateInput,
     SiteCreateInput,
     SiteUpdateInput,
+    TariffCreateInput,
     customer_document,
     decode_cursor,
+    decode_tariff_cursor,
     encode_cursor,
     plan_document,
     site_document,
+    tariff_document,
+    tariff_page_meta,
 )
 from hub.customers.application.customers import (
     CloseCustomer,
@@ -48,6 +52,7 @@ from hub.customers.application.sites_plans import (
     UpdatePlan,
     UpdateSite,
 )
+from hub.customers.application.tariffs import ListTariffs, ProposeTariff
 from hub.identity.contracts import Principal
 from hub.shared.api.concurrency import etag_for, require_if_match
 from hub.shared.api.permissions import PermissionsYamlPermission, operation
@@ -58,6 +63,7 @@ __all__ = [
     "CustomerDetailView",
     "PlanCollectionView",
     "PlanDetailView",
+    "PlanTariffCollectionView",
     "SiteCollectionView",
     "SiteDetailView",
 ]
@@ -231,6 +237,54 @@ class PlanDetailView(APIView):
         )
         tariff = wiring.plans().current_tariff(principal, plan.id)
         return Response({"data": plan_document(plan, current_tariff=tariff)})
+
+
+class PlanTariffCollectionView(APIView):
+    """`listPlanTariffs` and `createPlanTariff` (finance proposes, a second lead decides)."""
+
+    permission_classes = [PermissionsYamlPermission]
+
+    @operation("listPlanTariffs")
+    def get(self, request: Request, plan_id: Any) -> Response:
+        principal = _principal(request)
+        plan = wiring.plans().get(principal, GetPlan(plan_id=plan_id))
+        query = ListTariffs(
+            plan_id=plan_id,
+            after=decode_tariff_cursor(request.query_params.get("cursor")),
+            limit=_limit(request),
+        )
+        rows, has_next = wiring.tariffs().list(principal, query)
+        return Response(
+            {
+                "data": [tariff_document(row, currency=plan.currency) for row in rows],
+                "meta": tariff_page_meta(
+                    query.limit, has_next=has_next, last=rows[-1] if rows else None
+                ),
+            }
+        )
+
+    @operation("createPlanTariff")
+    def post(self, request: Request, plan_id: Any) -> Response:
+        payload = TariffCreateInput(data=request.data)
+        payload.is_valid(raise_exception=True)
+        data = payload.validated_data
+        fee: Any = data.get("daily_fixed_fee")
+        receipt = wiring.tariffs().propose(
+            _principal(request),
+            ProposeTariff(
+                plan_id=plan_id,
+                price_minor_per_kwh=int(data["price_per_kwh"]["amount_minor"]),
+                currency=str(data["price_per_kwh"]["currency"]),
+                effective_from=data["effective_from"],
+                reason=str(data["reason"]),
+                daily_fixed_fee_minor=int(fee["amount_minor"]) if fee else None,
+                daily_fixed_fee_currency=str(fee["currency"]) if fee else None,
+            ),
+        )
+        # 202, not 201: the price exists only once somebody else approves it.
+        response = Response({"data": dict(receipt.document)}, status=202)
+        response["Location"] = f"/api/v1/approvals/{receipt.id}"
+        return response
 
 
 def _customer_rows_to_document(rows: Any) -> list[dict[str, Any]]:

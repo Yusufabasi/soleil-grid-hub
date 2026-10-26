@@ -438,7 +438,12 @@ class CreateUserExecutor:
         self._ids = ids
 
     def __call__(
-        self, payload: Mapping[str, Any], principal: Principal, uow: UnitOfWork
+        self,
+        payload: Mapping[str, Any],
+        principal: Principal,
+        uow: UnitOfWork,
+        *,
+        approval_id: UUID,  # noqa: ARG002 - this action writes no reference to it
     ) -> Mapping[str, Any]:
         email = _text(payload, "email")
         if self._store.email_taken(email):
@@ -490,7 +495,12 @@ class GrantRoleExecutor:
         self._clock = clock
 
     def __call__(
-        self, payload: Mapping[str, Any], principal: Principal, uow: UnitOfWork
+        self,
+        payload: Mapping[str, Any],
+        principal: Principal,
+        uow: UnitOfWork,
+        *,
+        approval_id: UUID,  # noqa: ARG002 - this action writes no reference to it
     ) -> Mapping[str, Any]:
         user_id = UUID(_text(payload, "user_id"))
         change = _text(payload, "change")
@@ -537,7 +547,12 @@ class ResetMfaExecutor:
         self._clock = clock
 
     def __call__(
-        self, payload: Mapping[str, Any], principal: Principal, uow: UnitOfWork
+        self,
+        payload: Mapping[str, Any],
+        principal: Principal,
+        uow: UnitOfWork,
+        *,
+        approval_id: UUID,  # noqa: ARG002 - this action writes no reference to it
     ) -> Mapping[str, Any]:
         user_id = UUID(_text(payload, "user_id"))
         self._mfa.clear_mfa(user_id)

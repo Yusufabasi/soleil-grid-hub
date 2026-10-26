@@ -9,7 +9,7 @@ tell two situations apart that share a status.
 
 from __future__ import annotations
 
-from hub.shared.errors import Conflict, Duplicate, InvalidRequest, NotFound, ValidationFailed
+from hub.shared.errors import Conflict, Duplicate, NotFound, ValidationFailed
 
 __all__ = [
     "CustomerHasBalance",
@@ -76,8 +76,13 @@ class PlanLocked(ValidationFailed):
     message_key = "plan_locked"
 
 
-class InvalidTariff(InvalidRequest):
-    """A tariff proposal the rules refuse before it reaches the database: 422."""
+class InvalidTariff(ValidationFailed):
+    """A tariff the rules refuse before (or instead of) the database: 422 ``invalid_tariff``.
+
+    The body carries ``errors[]`` with a JSON pointer, like every other schema failure, so a
+    client can highlight the field: a date in the past, a price in another currency, or a
+    version that lost its date while the approval was pending.
+    """
 
     code = "invalid_tariff"
     message_key = "invalid_tariff"

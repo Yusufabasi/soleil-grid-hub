@@ -13,6 +13,7 @@ generator are too. Tests that need a different clock or store call :func:`reset`
 from __future__ import annotations
 
 import threading
+from typing import Any
 from urllib.parse import urlsplit
 
 from django.conf import settings
@@ -54,6 +55,7 @@ from hub.shared.redis import get_store
 from hub.shared.uow import DjangoUnitOfWork, PrincipalContext, UnitOfWork
 
 __all__ = [
+    "add_approval_executor",
     "approval_registry",
     "approvals",
     "audit_log",
@@ -90,6 +92,13 @@ _enrollment: EnrollmentService | None = None
 _webauthn: WebauthnService | None = None
 _oidc: OidcLogin | None = None
 _step_up: StepUpService | None = None
+# Executors other modules contribute at start-up (``tariff.change`` today, the ledger's and
+# reconciliation's later). Composition, not cached state: :func:`reset` keeps this table, so a
+# registry rebuilt for any reason still knows every kind this process can execute. Without it a
+# reset would quietly turn an approvable action into "forbidden", which reads like a bug in the
+# permission layer instead of a missing registration.
+_contributions: dict[str, tuple[str, str | None, Any]] = {}
+
 _approvals: ApprovalService | None = None
 _approval_registry: ExecutorRegistry | None = None
 _user_admin: UserAdminService | None = None
@@ -111,8 +120,8 @@ def reset() -> None:
         _proof = _customer_otp = _notifier = None
 
 
-def use_clock(clock: Clock) -> None:
-    """Install a clock and drop the adapters that captured the previous one.
+def use_clock(clock: Clock | None) -> None:
+    """Install a clock (or, with ``None``, go back to the system one) and drop its adapters.
 
     A test seam, and the only reason this module has one: idle and absolute session limits and
     the step-up boundary are seconds apart, so proving them needs a frozen clock rather than a
@@ -330,6 +339,29 @@ def approval_registry() -> ExecutorRegistry:
     return _approval_registry
 
 
+def add_approval_executor(
+    kind: str,
+    *,
+    required_permission: str,
+    required_attribute: str | None,
+    execute: Any,
+) -> None:
+    """Contribute an executor for ``kind``; it survives a later :func:`reset`.
+
+    Called by a module that owns an approvable action (``customers`` registers
+    ``tariff.change``), because `identity` may not import that module's application layer.
+    """
+    with _lock:
+        _contributions[kind] = (required_permission, required_attribute, execute)
+        if _approval_registry is not None:
+            _approval_registry.register(
+                kind,
+                required_permission=required_permission,
+                required_attribute=required_attribute,
+                execute=execute,
+            )
+
+
 def _build_registry() -> ExecutorRegistry:
     """The executors this build can run, each with the permission its approver must hold."""
     registry = ExecutorRegistry()
@@ -356,6 +388,13 @@ def _build_registry() -> ExecutorRegistry:
             mfa=users(), sessions=SessionRepository(), audit=audit_log(), clock=clock()
         ),
     )
+    for kind, (permission, attribute, execute) in _contributions.items():
+        registry.register(
+            kind,
+            required_permission=permission,
+            required_attribute=attribute,
+            execute=execute,
+        )
     return registry
 
 
