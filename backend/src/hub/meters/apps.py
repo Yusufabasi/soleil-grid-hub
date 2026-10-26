@@ -8,14 +8,18 @@ class MetersConfig(AppConfig):
     label = "meters"
 
     def ready(self) -> None:
-        """Publish the meter counter ``customers`` needs for a site's ``meter_count``.
+        """Publish the meter counter ``customers`` needs, and take the facts it offers.
 
-        Direction matters: ``hub.customers`` may import only this module's contracts and
-        events (import-linter), so the adapter is registered here instead of being imported
-        there. Nothing touches the database at start-up — the counter only runs when a site
-        document is read.
+        Both directions are registrations, and the asymmetry is the architecture's: this module
+        may import ``hub.customers.contracts`` (so it builds its own adapter over the two store
+        Protocols), while ``hub.customers`` may not import this module at all — which is why
+        its ``meter_count`` arrives as a registration here instead of an import there. Nothing
+        touches the database at start-up; both adapters only run when a request needs them.
         """
-        from hub.customers.wiring import use_meter_counter  # noqa: PLC0415
+        from hub.customers.wiring import customer_store, site_store, use_meter_counter  # noqa: PLC0415
+        from hub.meters.application.directory import RegistryFactsAdapter  # noqa: PLC0415
         from hub.meters.infrastructure.repositories import MeterRepository  # noqa: PLC0415
+        from hub.meters.wiring import use_registry_facts  # noqa: PLC0415
 
         use_meter_counter(MeterRepository())
+        use_registry_facts(RegistryFactsAdapter(customers=customer_store(), sites=site_store()))

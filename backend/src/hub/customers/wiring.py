@@ -21,7 +21,13 @@ from django.conf import settings
 from hub.customers.application.customers import CustomerService
 from hub.customers.application.sites_plans import PlanService, SiteService
 from hub.customers.application.tariffs import TariffChangeExecutor, TariffService
-from hub.customers.contracts import MeterCounter, ProposalReceipt, WalletBalanceProbe
+from hub.customers.contracts import (
+    CustomerStore,
+    MeterCounter,
+    ProposalReceipt,
+    SiteStore,
+    WalletBalanceProbe,
+)
 from hub.customers.infrastructure.repositories import (
     CustomerRepository,
     PlanRepository,
@@ -43,8 +49,10 @@ __all__ = [
     "customer_service",
     "customers",
     "ids",
+    "customer_store",
     "meter_counter",
     "plans",
+    "site_store",
     "register_approval_executors",
     "reset",
     "sites",
@@ -218,6 +226,16 @@ def tariffs() -> TariffService:
                     approvals=_IdentityApprovals(),
                 )
     return _tariffs
+
+
+def customer_store() -> CustomerStore:
+    """The customer lookup `meters` wraps for an assignment (the contract, not the row)."""
+    return CustomerRepository()
+
+
+def site_store() -> SiteStore:
+    """The site lookup `meters` wraps, so a meter cannot be installed at a site that is gone."""
+    return SiteRepository()
 
 
 def register_approval_executors() -> None:

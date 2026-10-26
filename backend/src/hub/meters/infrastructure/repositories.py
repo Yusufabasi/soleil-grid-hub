@@ -101,6 +101,20 @@ class MeterRepository:
             row = cursor.fetchone()
         return _meter(row) if row is not None else None
 
+    def find_by_serial(self, serial_no: str) -> MeterRow | None:
+        """The serial pre-check: it saves a 409 from an aborted transaction, nothing more.
+
+        ``uq_meters_serial`` stays the guarantee — two creates that both pass this read still
+        end with one row, and the loser maps the constraint to ``serial_conflict``.
+        """
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"SELECT {_METER_COLUMNS} FROM hub.meters WHERE serial_no = %s",  # noqa: S608
+                [serial_no],
+            )
+            row = cursor.fetchone()
+        return _meter(row) if row is not None else None
+
     def lock_for_assign(self, meter_id: UUID) -> MeterRow | None:
         """Read the row under ``FOR UPDATE``; the caller must be inside a unit of work."""
         with connection.cursor() as cursor:
@@ -160,9 +174,18 @@ class MeterRepository:
         *,
         site_ids: Sequence[UUID] | None,
         customer_id: UUID | None = None,
+        site_id: UUID | None = None,
+        statuses: Sequence[str] = (),
+        serial_no: str | None = None,
+        serial_prefix: str | None = None,
         after_id: UUID | None = None,
         limit: int = 25,
     ) -> list[MeterRow]:
+        """One page within the caller's sites; ``site_ids is None`` means every site.
+
+        An empty list can never widen access — it matches nothing. The order is ``id DESC``
+        and the cursor is that same id, so a page boundary cannot repeat or skip a row.
+        """
         filters: list[str] = []
         params: list[Any] = []
         if site_ids is not None:
@@ -171,13 +194,26 @@ class MeterRepository:
         if customer_id is not None:
             filters.append("customer_id = %s")
             params.append(customer_id)
+        if site_id is not None:
+            filters.append("site_id = %s")
+            params.append(site_id)
+        if statuses:
+            filters.append("status = ANY(%s)")
+            params.append(list(statuses))
+        if serial_no is not None:
+            filters.append("serial_no = %s")
+            params.append(serial_no)
+        if serial_prefix:
+            filters.append("serial_no LIKE %s")
+            params.append(f"{serial_prefix}%")
         if after_id is not None:
             filters.append("id < %s")
             params.append(after_id)
+        order = "id DESC"
         where = f"WHERE {' AND '.join(filters)} " if filters else ""
         statement = (
             f"SELECT {_METER_COLUMNS} FROM hub.meters {where}"  # noqa: S608 - literal columns
-            "ORDER BY id DESC LIMIT %s"
+            f"ORDER BY {order} LIMIT %s"
         )
         params.append(limit)
         with connection.cursor() as cursor:

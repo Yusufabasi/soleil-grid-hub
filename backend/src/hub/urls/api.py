@@ -10,5 +10,6 @@ urlpatterns = [
     path("api/v1/", include("hub.shared.api.urls")),
     path("api/v1/", include("hub.identity.api.urls")),
     path("api/v1/", include("hub.customers.api.urls")),
+    path("api/v1/", include("hub.meters.api.urls")),
     path("api/v1/", include("hub.admin.api.urls")),
 ]

@@ -18,6 +18,7 @@ __all__ = [
     "ApprovalProposer",
     "CustomerDirectory",
     "CustomerRow",
+    "CustomerStore",
     "CustomerView",
     "EnergyQuote",
     "PlanRow",
@@ -148,6 +149,16 @@ class EnergyQuote:
     plan_tariff_id: UUID
     tariff_minor_per_kwh: int
     energy_wh: int
+
+
+class CustomerStore(Protocol):
+    """The one lookup a neighbour needs to validate a reference to a customer.
+
+    ``registry.directory.RegistryFactsAdapter`` is the only implementation that crosses a
+    module boundary; the use cases use their own, wider protocol inside ``application``.
+    """
+
+    def get(self, customer_id: UUID) -> CustomerRow | None: ...
 
 
 class CustomerDirectory(Protocol):

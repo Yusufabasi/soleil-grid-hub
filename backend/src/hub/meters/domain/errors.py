@@ -7,13 +7,14 @@ a code without sharing a hierarchy. The code is the contract; the class is not.
 
 from __future__ import annotations
 
-from hub.shared.errors import Conflict, Duplicate
+from hub.shared.errors import Conflict, Duplicate, NotFound, ValidationFailed
 
 __all__ = [
     "InvalidMeterState",
     "MeterCreditOutstanding",
     "MeterNotUsable",
     "MeterSerialConflict",
+    "MeterUnknown",
     "SiteMismatch",
     "VersionConflict",
 ]
@@ -37,8 +38,19 @@ class VersionConflict(Conflict):
     message_key = "version_conflict"
 
 
+class MeterUnknown(NotFound):
+    """A meter id that does not exist, or one outside the caller's sites: 404."""
+
+    code = "not_found"
+    message_key = "not_found"
+
+
 class MeterNotUsable(Conflict):
-    """A meter a credit path may not use (FR-01, TC-FR-01-3)."""
+    """A meter a credit path may not use (FR-01, TC-FR-01-3).
+
+    The reason is the instance's code — ``meter_decommissioned`` or ``meter_not_owned`` —
+    because a top-up refusal has to say which of the two it is.
+    """
 
     code = "meter_not_usable"
     message_key = "meter_not_usable"
@@ -58,8 +70,8 @@ class InvalidMeterState(Conflict):
     message_key = "invalid_state_transition"
 
 
-class SiteMismatch(Conflict):
-    """A meter assigned to a customer of another site: 409 ``site_mismatch``."""
+class SiteMismatch(ValidationFailed):
+    """A meter assigned to a customer of another site: 422 ``site_mismatch``."""
 
     code = "site_mismatch"
     message_key = "site_mismatch"
