@@ -10,10 +10,10 @@ Only operations this build actually mounts are exercised. The OpenAPI document d
 operations across all sixteen slices; the other 133 have no route here, and asserting their
 verdicts would be asserting that Django answers 404, which proves nothing about authorization.
 
-The `public` surface is excluded from the positive cells on purpose: a public operation is
-callable without any credential, so a staff token proves nothing about it, and its behaviour is
-covered by the login, one-time-code and WebAuthn suites. Kinds this build cannot yet issue a
-credential for (customer bearer, integrator and gateway API keys) are pinned separately below.
+A `public` row asserts the complementary half instead: the operation must stay reachable for
+every staff role, because a permission class that refused a credential it does not need would
+close a door the contract leaves open. Kinds this build cannot yet issue a credential for
+(customer bearer, integrator and gateway API keys) are pinned separately below.
 """
 
 from __future__ import annotations
@@ -148,7 +148,18 @@ def test_every_role_by_every_routed_operation(
 ) -> None:
     """Allowed roles clear the permission class; every other staff role is refused."""
     if PUBLIC in operation.roles:
-        pytest.skip("a public operation is judged by its own suite, not by a staff token")
+        # The row is still a real call. A public operation needs no credential, so the verdict
+        # a staff token must produce is the anonymous one: the permission class neither helps
+        # nor hurts. (A cookie route still answers 401 to an absent cookie; that is the
+        # handler's answer and it is the same with a token.)
+        anonymous = call(client, operation, None).status_code
+        for role in STAFF_ROLES:
+            response = call(client, operation, token_for(staff[role]))
+            assert response.status_code == anonymous, (
+                f"{operation.operation_id} is public, yet a {role} token changed the answer "
+                f"from {anonymous} to {response.status_code}"
+            )
+        return
 
     for role in STAFF_ROLES:
         response = call(client, operation, token_for(staff[role]))
