@@ -15,8 +15,11 @@ import threading
 from datetime import datetime
 from uuid import UUID
 
+from django.conf import settings
+
+from hub.customers.application.customers import CustomerService
 from hub.customers.application.sites_plans import PlanService, SiteService
-from hub.customers.contracts import MeterCounter
+from hub.customers.contracts import MeterCounter, WalletBalanceProbe
 from hub.customers.infrastructure.repositories import (
     CustomerRepository,
     PlanRepository,
@@ -32,7 +35,9 @@ from hub.shared.ports import Clock
 
 __all__ = [
     "audit_log",
+    "balance_probe",
     "clock",
+    "customer_service",
     "customers",
     "ids",
     "meter_counter",
@@ -58,6 +63,7 @@ _sites: SiteService | None = None
 _plans: PlanService | None = None
 _audit: AuditLog | None = None
 _customers: CustomerRepository | None = None
+_customer_service: CustomerService | None = None
 
 
 class _NoMeters:
@@ -76,9 +82,12 @@ _counter: MeterCounter = _NoMeters()
 
 def reset() -> None:
     """Drop every cached service; tests call it after changing a setting."""
-    global _clock, _ids, _sites, _plans, _audit, _customers  # noqa: PLW0603
+    global _clock, _ids, _sites, _plans, _audit, _customers, _customer_service  # noqa: PLW0603
+    global _probe  # noqa: PLW0603
     with _lock:
         _clock = _ids = _sites = _plans = _audit = _customers = None
+        _customer_service = None
+        _probe = _NoWallet()
 
 
 def clock() -> Clock:
@@ -161,3 +170,47 @@ def plans() -> PlanService:
                     unit_of_work=unit_of_work,
                 )
     return _plans
+
+
+class _NoWallet:
+    """The balance a close must see zero; slice 03 binds the ledger and replaces this."""
+
+    def balance_minor(self, customer_id: UUID) -> int:  # noqa: ARG002 - the port's shape
+        return 0
+
+
+_probe: WalletBalanceProbe = _NoWallet()
+
+
+def use_balance_probe(probe: WalletBalanceProbe) -> None:
+    """Install a wallet probe; slice 03 does this at composition, tests do it directly."""
+    global _probe, _customer_service  # noqa: PLW0603
+    with _lock:
+        _probe = probe
+        _customer_service = None
+
+
+def balance_probe() -> WalletBalanceProbe:
+    return _probe
+
+
+def customer_service() -> CustomerService:
+    """The registry's customer use cases, sharing the site and plan stores with the others."""
+    global _customer_service  # noqa: PLW0603
+    if _customer_service is None:
+        with _lock:
+            if _customer_service is None:
+                from hub.customers.infrastructure.repositories import PlanRepository  # noqa: PLC0415
+
+                _customer_service = CustomerService(
+                    clock=clock(),
+                    ids=ids(),
+                    customers=customers(),
+                    sites=SiteRepository(),
+                    plans=PlanRepository(),
+                    balances=balance_probe(),
+                    audit=audit_log(),
+                    unit_of_work=unit_of_work,
+                    default_phone_prefix=str(settings.HUB_DEFAULT_PHONE_PREFIX),
+                )
+    return _customer_service

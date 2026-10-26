@@ -24,6 +24,13 @@ REPO_ROOT = BACKEND_DIR.parent
 # file's location", which is right for a checkout; the image sets it to /app.
 HUB_REPO_ROOT = env.str("HUB_REPO_ROOT", default="") or str(REPO_ROOT)
 
+# Registry defaults (slice 02): the country prefix a national phone number is completed
+# with, and the key the pseudonymous view derives from a customer id.
+HUB_DEFAULT_PHONE_PREFIX = env.str("HUB_DEFAULT_PHONE_PREFIX", default="+243")
+HUB_PSEUDONYM_KEY = env.str("HUB_PSEUDONYM_KEY", default="dev-pseudonym-key-not-a-secret")
+HUB_IMPORT_MAX_ROWS = env.int("HUB_IMPORT_MAX_ROWS", default=5000)
+HUB_IMPORT_MAX_BYTES = env.int("HUB_IMPORT_MAX_BYTES", default=2_097_152)
+
 # The contract files the permission class reads at start (docs/03 7.7 item 4): the allowed
 # roles per operation, and the operation list with its x-step-up / x-approval extensions.
 HUB_CONTRACT_DIR = str(Path(HUB_REPO_ROOT) / "api")

@@ -9,6 +9,8 @@ from typing import Any
 from django.urls import path
 
 from hub.customers.api.views import (
+    CustomerCollectionView,
+    CustomerDetailView,
     PlanCollectionView,
     PlanDetailView,
     SiteCollectionView,
@@ -18,6 +20,12 @@ from hub.customers.api.views import (
 __all__ = ["urlpatterns"]
 
 urlpatterns: list[Any] = [
+    path("customers", CustomerCollectionView.as_view(), name="listCustomers"),
+    path(
+        "customers/<uuid:customer_id>",
+        CustomerDetailView.as_view(),
+        name="getCustomer",
+    ),
     path("sites", SiteCollectionView.as_view(), name="listSites"),
     path("sites/<uuid:site_id>", SiteDetailView.as_view(), name="getSite"),
     path("plans", PlanCollectionView.as_view(), name="listPlans"),

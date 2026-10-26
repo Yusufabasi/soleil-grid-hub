@@ -16,14 +16,25 @@ from rest_framework.views import APIView
 
 from hub.customers import wiring
 from hub.customers.api.serializers import (
+    CustomerCreateInput,
+    CustomerUpdateInput,
     PlanCreateInput,
     PlanUpdateInput,
     SiteCreateInput,
     SiteUpdateInput,
+    customer_document,
     decode_cursor,
     encode_cursor,
     plan_document,
     site_document,
+)
+from hub.customers.application.customers import (
+    CloseCustomer,
+    CustomerQuery,
+    GetCustomer,
+    ListCustomers,
+    RegisterCustomer,
+    UpdateCustomer,
 )
 from hub.customers.application.sites_plans import (
     CreatePlan,
@@ -38,10 +49,18 @@ from hub.customers.application.sites_plans import (
     UpdateSite,
 )
 from hub.identity.contracts import Principal
+from hub.shared.api.concurrency import etag_for, require_if_match
 from hub.shared.api.permissions import PermissionsYamlPermission, operation
 from hub.shared.errors import InvalidRequest, Unauthenticated
 
-__all__ = ["PlanCollectionView", "PlanDetailView", "SiteCollectionView", "SiteDetailView"]
+__all__ = [
+    "CustomerCollectionView",
+    "CustomerDetailView",
+    "PlanCollectionView",
+    "PlanDetailView",
+    "SiteCollectionView",
+    "SiteDetailView",
+]
 
 
 def _principal(request: Request) -> Principal:
@@ -212,3 +231,120 @@ class PlanDetailView(APIView):
         )
         tariff = wiring.plans().current_tariff(principal, plan.id)
         return Response({"data": plan_document(plan, current_tariff=tariff)})
+
+
+def _customer_rows_to_document(rows: Any) -> list[dict[str, Any]]:
+    return [customer_document(row) for row in rows]
+
+
+class CustomerCollectionView(APIView):
+    """`listCustomers` and `createCustomer` (support; finance and operations read)."""
+
+    permission_classes = [PermissionsYamlPermission]
+
+    @operation("listCustomers")
+    def get(self, request: Request) -> Response:
+        principal = _principal(request)
+        params = request.query_params
+        statuses = [
+            part.strip() for part in (params.get("status") or "").split(",") if part.strip()
+        ]
+        query = CustomerQuery(
+            statuses=statuses,
+            site_id=_uuid_param(params.get("site_id")),
+            plan_id=_uuid_param(params.get("plan_id")),
+            phone_e164=params.get("phone_e164"),
+            after_id=decode_cursor(params.get("cursor")),
+            limit=_limit(request),
+        )
+        page, next_cursor = wiring.customer_service().list(principal, ListCustomers(query=query))
+        return Response(
+            {
+                "data": _customer_rows_to_document(page),
+                "meta": {
+                    "has_next": next_cursor is not None,
+                    "next_cursor": encode_cursor(next_cursor),
+                    "limit": query.limit,
+                },
+            }
+        )
+
+    @operation("createCustomer")
+    def post(self, request: Request) -> Response:
+        payload = CustomerCreateInput(data=request.data)
+        payload.is_valid(raise_exception=True)
+        data = payload.validated_data
+        row = wiring.customer_service().register(
+            _principal(request),
+            RegisterCustomer(
+                full_name=str(data["full_name"]),
+                phone=str(data["phone_e164"]),
+                site_id=data["site_id"],
+                plan_id=data["plan_id"],
+                email=data.get("email"),
+                locale=str(data.get("locale") or "fr"),
+            ),
+        )
+        response = Response({"data": customer_document(row)}, status=201)
+        response["Location"] = f"/api/v1/customers/{row.id}"
+        response["ETag"] = etag_for(row.version)
+        return response
+
+
+class CustomerDetailView(APIView):
+    """`getCustomer`, `updateCustomer` and `closeCustomer`, all site-scoped."""
+
+    permission_classes = [PermissionsYamlPermission]
+
+    @operation("getCustomer")
+    def get(self, request: Request, customer_id: Any) -> Response:
+        principal = _principal(request)
+        row = wiring.customer_service().get(principal, GetCustomer(customer_id=customer_id))
+        response = Response({"data": customer_document(row)})
+        response["ETag"] = etag_for(row.version)
+        return response
+
+    @operation("updateCustomer")
+    def patch(self, request: Request, customer_id: Any) -> Response:
+        principal = _principal(request)
+        service = wiring.customer_service()
+        current = service.get(principal, GetCustomer(customer_id=customer_id))
+        # 428 when the header is missing, 412 when it names another version: the write never
+        # runs blind, and the repository's `WHERE version = %s` is the second layer.
+        require_if_match(request, current.version)
+
+        payload = CustomerUpdateInput(data=request.data)
+        payload.is_valid(raise_exception=True)
+        data = payload.validated_data
+        row = service.update(
+            principal,
+            UpdateCustomer(
+                customer_id=customer_id,
+                full_name=data.get("full_name"),
+                email=data.get("email"),
+                locale=data.get("locale"),
+                site_id=data.get("site_id"),
+                plan_id=data.get("plan_id"),
+                status=data.get("status"),
+            ),
+        )
+        response = Response({"data": customer_document(row)})
+        response["ETag"] = etag_for(row.version)
+        return response
+
+    @operation("closeCustomer")
+    def delete(self, request: Request, customer_id: Any) -> Response:
+        wiring.customer_service().close(_principal(request), CloseCustomer(customer_id=customer_id))
+        return Response(status=204)
+
+
+def _uuid_param(raw: str | None) -> Any:
+    """A uuid query filter, or ``invalid_request`` — never a silent "no filter"."""
+    if not raw:
+        return None
+    from uuid import UUID  # noqa: PLC0415
+
+    try:
+        return UUID(raw)
+    except ValueError as exc:
+        raise InvalidRequest() from exc

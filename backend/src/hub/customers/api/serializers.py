@@ -16,10 +16,13 @@ from uuid import UUID
 
 from rest_framework import serializers
 
-from hub.customers.contracts import PlanRow, PlanTariffRow, SiteRow
+from hub.customers.contracts import CustomerRow, PlanRow, PlanTariffRow, SiteRow
 from hub.shared.errors import InvalidCursor
 
 __all__ = [
+    "CustomerCreateInput",
+    "CustomerUpdateInput",
+    "customer_document",
     "PlanCreateInput",
     "PlanUpdateInput",
     "SiteCreateInput",
@@ -83,6 +86,47 @@ class PlanUpdateInput(serializers.Serializer[dict[str, Any]]):
     min_top_up = MoneyInput(required=False)
     max_top_up = MoneyInput(required=False)
     status = serializers.ChoiceField(choices=("draft", "active", "retired"), required=False)
+
+
+class CustomerCreateInput(serializers.Serializer[dict[str, Any]]):
+    """``CustomerCreate``: the phone is accepted as typed and normalised by the use case."""
+
+    full_name = serializers.CharField(min_length=1, max_length=160)
+    phone_e164 = serializers.CharField(max_length=32)
+    email = serializers.EmailField(required=False, allow_null=True)
+    locale = serializers.ChoiceField(choices=("en", "fr"), required=False)
+    site_id = serializers.UUIDField()
+    plan_id = serializers.UUIDField()
+
+
+class CustomerUpdateInput(serializers.Serializer[dict[str, Any]]):
+    """``CustomerUpdate``: name, email, locale, site, plan and the two live statuses."""
+
+    full_name = serializers.CharField(min_length=1, max_length=160, required=False)
+    email = serializers.EmailField(required=False, allow_null=True)
+    locale = serializers.ChoiceField(choices=("en", "fr"), required=False)
+    site_id = serializers.UUIDField(required=False)
+    plan_id = serializers.UUIDField(required=False)
+    status = serializers.ChoiceField(choices=("active", "suspended"), required=False)
+
+
+def customer_document(row: CustomerRow) -> dict[str, Any]:
+    """``api/openapi.yaml`` Customer. ``customer_number`` is the external ref, or the id."""
+    number = row.external_ref or row.id.hex[:8].upper()
+    return {
+        "id": str(row.id),
+        "customer_number": number,
+        "full_name": row.full_name,
+        "phone_e164": row.phone_e164,
+        "email": row.email,
+        "locale": row.language,
+        "status": row.status,
+        "site_id": str(row.site_id),
+        "plan_id": str(row.plan_id),
+        "created_at": row.created_at.isoformat().replace("+00:00", "Z"),
+        "updated_at": row.updated_at.isoformat().replace("+00:00", "Z"),
+        "version": row.version,
+    }
 
 
 def money(amount_minor: int, currency: str) -> dict[str, Any]:
