@@ -23,7 +23,9 @@ from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Protocol, TypeVar
+from uuid import UUID
 
+import structlog
 import yaml
 from django.conf import settings
 from rest_framework.exceptions import NotAuthenticated, PermissionDenied
@@ -61,6 +63,7 @@ class PrincipalLike(Protocol):
     the authentication class supplies an object that satisfies it.
     """
 
+    subject_id: UUID
     kind: str
     roles: frozenset[str]
     attributes: frozenset[str]
@@ -78,6 +81,37 @@ class OperationRule:
     requires_attribute: str | None = None
     approval: str | None = None
     site_scoped: bool = False
+
+
+# A refusal is recorded by the module that owns the audit log, because `shared` may not import
+# it (docs/03 section 0). `identity.apps.IdentityConfig.ready` installs the recorder; without
+# one the permission class still refuses, it just cannot say so in the audit trail.
+DenialRecorder = Callable[["PrincipalLike | None", OperationRule, str], None]
+
+_denial_recorder: DenialRecorder | None = None
+
+logger = structlog.get_logger(__name__)
+
+
+def set_denial_recorder(recorder: DenialRecorder | None) -> None:
+    """Install (or, with ``None``, remove) the callable that records a refusal."""
+    global _denial_recorder  # noqa: PLW0603
+    _denial_recorder = recorder
+
+
+def _record_denial(principal: PrincipalLike | None, rule: OperationRule, reason: str) -> None:
+    """Write the refusal if a recorder is installed; never let the audit break the answer."""
+    if _denial_recorder is None:
+        return
+    try:
+        _denial_recorder(principal, rule, reason)
+    except Exception:  # noqa: BLE001 - a refusal must survive a broken audit sink
+        logger.warning(
+            "authorization.denial_not_recorded",
+            operation_id=rule.operation_id,
+            reason=reason,
+            exc_info=True,
+        )
 
 
 def operation(operation_id: str) -> Callable[[ViewHandler], ViewHandler]:
@@ -184,6 +218,8 @@ class PermissionsYamlPermission(BasePermission):
         rule = operation_rules().get(operation_id) if operation_id is not None else None
         if rule is None:
             # Deny by default: an undeclared handler has no roles and no exception.
+            undeclared = OperationRule(operation_id=operation_id or "", roles=frozenset())
+            _record_denial(_principal(request), undeclared, "undeclared")
             raise PermissionDenied("forbidden")
 
         if PUBLIC in rule.roles:
@@ -191,14 +227,17 @@ class PermissionsYamlPermission(BasePermission):
 
         principal = _principal(request)
         if principal is None:
+            _record_denial(None, rule, "unauthenticated")
             raise NotAuthenticated()
 
         if not (roles_of(principal) & rule.roles):
+            _record_denial(principal, rule, "role")
             raise PermissionDenied("forbidden")
 
         if not step_up_is_fresh(principal, rule, now=current()):
             # 401, not 403: the caller is allowed to do this, but not with an authentication
             # this old. The challenge tells the client how to ask again (RFC 6750, D-16).
+            _record_denial(principal, rule, "step_up")
             raise Unauthenticated(
                 code=rule.step_up_problem_code,
                 message_key="step_up_required",

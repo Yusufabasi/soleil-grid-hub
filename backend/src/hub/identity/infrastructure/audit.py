@@ -29,11 +29,12 @@ from django.db import DatabaseError, connection
 from psycopg.types.json import Jsonb
 
 from hub.identity.contracts import AuditEntry, AuditLog, AuditOutcome, Principal
+from hub.shared.api.permissions import OperationRule, PrincipalLike
 from hub.shared.context import request_id_var
 from hub.shared.db import call_function
 from hub.shared.errors import PermissionDenied
 
-__all__ = ["HubAuditLog"]
+__all__ = ["HubAuditLog", "record_access_denied"]
 
 # A key containing any of these would put a personal value or a credential into a table that
 # can never be corrected. Matching is on substrings, so `password_hash`, `access_token` and
@@ -149,6 +150,29 @@ def _entry(row: Sequence[Any]) -> AuditEntry:
         details=details,
         prev_hash=bytes(row[11]).hex() if row[11] is not None else "",
         hash=bytes(row[12]).hex(),
+    )
+
+
+def record_access_denied(principal: PrincipalLike | None, rule: OperationRule, reason: str) -> None:
+    """The permission class's denial hook: one ``auth`` row naming the refused operation.
+
+    Refusals are the signal an auditor looks for (docs/07 S-8), so a call that never reached a
+    use case still leaves a trace. The identity is the authenticated one, or ``system`` when no
+    credential was accepted; the reason is one of ``role``, ``unauthenticated``, ``step_up`` or
+    ``undeclared``. Nothing personal goes in ``details`` — the audit table is append-only.
+    """
+    # Imported here: `wiring` imports this module, so a top-level import would be a cycle.
+    from hub.identity import wiring  # noqa: PLC0415 - the hook runs only at request time
+
+    wiring.audit_log().record(
+        stream="auth",
+        actor=cast("Principal | None", principal),
+        action="authz.denied",
+        entity_type="operation",
+        entity_id=None,
+        site_id=None,
+        details={"operation": rule.operation_id, "reason": reason},
+        outcome="denied",
     )
 
 

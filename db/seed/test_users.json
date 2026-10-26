@@ -1,0 +1,87 @@
+{
+  "note": "Test-only identities for local development and CI. Every secret here is published in the repository on purpose: none of these accounts exists outside a throwaway database. The passwords and TOTP secrets are the ones the demo script and the integration tests use. Never copy this file into a deployment.",
+  "password": "Soleil!Local-2026",
+  "site": {
+    "id": "0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f0001",
+    "code": "LSHI",
+    "name": "Lubumbashi",
+    "currency": "USD"
+  },
+  "plan": {
+    "id": "0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f0002",
+    "code": "BASIC",
+    "name": "Basic",
+    "currency": "USD",
+    "min_topup_minor": 100,
+    "max_topup_minor": 100000
+  },
+  "staff": [
+    {
+      "email": "support@example.test",
+      "display_name": "Support Agent",
+      "roles": ["support_agent"],
+      "attributes": [],
+      "totp_secret": "JBSWY3DPEHPK3PXP",
+      "all_sites": true,
+      "sites": [],
+      "locale": "en"
+    },
+    {
+      "email": "finance@example.test",
+      "display_name": "Finance Officer",
+      "roles": ["finance_officer"],
+      "attributes": [],
+      "totp_secret": "KRSXG5CTMVRXEZLU",
+      "all_sites": true,
+      "sites": [],
+      "locale": "en"
+    },
+    {
+      "email": "finance.lead@example.test",
+      "display_name": "Finance Lead",
+      "roles": ["finance_officer"],
+      "attributes": ["finance_lead"],
+      "totp_secret": "MFRGGZDFMZTWQ2LK",
+      "all_sites": true,
+      "sites": [],
+      "locale": "fr"
+    },
+    {
+      "email": "operations@example.test",
+      "display_name": "Operations Engineer",
+      "roles": ["operations_engineer"],
+      "attributes": [],
+      "totp_secret": "GEZDGNBVGY3TQOJQ",
+      "all_sites": true,
+      "sites": [],
+      "locale": "en"
+    },
+    {
+      "email": "administrator@example.test",
+      "display_name": "Administrator",
+      "roles": ["administrator"],
+      "attributes": [],
+      "totp_secret": "NBSWY3DPFQQFO33S",
+      "all_sites": true,
+      "sites": [],
+      "locale": "en"
+    },
+    {
+      "email": "administrator.two@example.test",
+      "display_name": "Second Administrator",
+      "roles": ["administrator"],
+      "attributes": [],
+      "totp_secret": "ONSWG4TFOQQFO33S",
+      "all_sites": true,
+      "sites": [],
+      "locale": "en"
+    }
+  ],
+  "customer": {
+    "id": "0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f0003",
+    "full_name": "Amina Kalonji",
+    "phone_e164": "+243810000123",
+    "email": "amina.kalonji@example.test",
+    "language": "fr"
+  }
+}
