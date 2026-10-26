@@ -6,6 +6,26 @@ Executor: implementing agent. Guide: `docs/plan/00-executor-guide.md`. Slices co
 test command and its summary line) and paste the full `make verify SLICE=00` output at the end
 of the slice.
 
+## Working mode from slice 02 (owner's decision, 2026-10-26)
+
+The per-task cadence of slices 00 and 01 cost about 25–45 minutes per task, most of it ceremony
+rather than code. From slice 02 the mode is batched per slice. It deviates from executor guide
+rule 3 ("one commit per task") deliberately, on the owner's instruction; everything the guide
+requires for correctness stays.
+
+- **Kept per task**: the slice document's named tests, written first; contract and schema
+  fidelity; the `progress.md` row with the test command and its result; `make verify SLICE=NN`
+  and the demo at slice end.
+- **Batched to the slice**: one commit (`feat(<module>): slice NN ...` with the task list in the
+  body), one full `make lint`, one `make verify`, one demo on the gunicorn stack.
+- **During the slice**: ruff, mypy and the touched test file only, run in the venv (seconds), so a
+  gate failure is found where it is made rather than after a whole-suite run; the docker image is
+  rebuilt only when the slice's task actually changes it.
+- **No verification task**: the slice's last task carries the verification and the evidence.
+
+The demo still runs once per slice on the multi-worker stack on purpose: that is what exposed
+the per-worker signing key and the missing `api/` in the image, which single-process runs hid.
+
 ## Task log — slice 00
 
 | Task | Scope | Status | Commit | Test command and result |
