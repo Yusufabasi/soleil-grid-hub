@@ -62,6 +62,18 @@ up: env
 down:
 	$(COMPOSE) down
 
+# Published test identities (db/seed/test_users.json): one account per staff role, a finance
+# lead, a second administrator and one customer. Idempotent, and the command itself refuses to
+# run anywhere but a local, test or ci database.
+seed: env
+	$(COMPOSE) exec -T hub-api python manage.py load_fixtures
+
+# The slice 01 demo (docs/plan/slice-01-identity-rbac-approvals.md): sign-in, refresh reuse,
+# maker-checker, audit and the customer code, against a stack that `make seed` has filled.
+# It creates one account, so it wants a fresh volume.
+demo: venv
+	backend/.venv/bin/python tools/demo_slice01.py
+
 reset:
 	$(COMPOSE) down -v --remove-orphans
 

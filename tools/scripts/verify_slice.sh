@@ -50,6 +50,20 @@ case "${SLICE}" in
       "if command -v actionlint >/dev/null 2>&1; then actionlint; else echo 'actionlint is not installed: workflow lint skipped'; fi"
     )
     ;;
+  01)
+    commands=(
+      "make lint"
+      "make contracts"
+      "cd backend && python -m pytest tests/unit/identity tests/integration/identity tests/integration/admin tests/architecture -q"
+      "cd backend && python -m pytest tests/contract/test_auth_matrix.py -q"
+      "cd backend && python ../tools/check_django_config.py"
+      # The plan's step 6 selects from a schemathesis harness (tests/contract/
+      # test_openapi_conformance.py) that this tree does not have yet; it belongs to the
+      # verification-tooling track T4. The guard says so out loud instead of collecting
+      # nothing, and the deviation is written up in docs/plan/progress.md.
+      "if [ -f backend/tests/contract/test_openapi_conformance.py ]; then cd backend && python -m pytest tests/contract/test_openapi_conformance.py -q -k 'Auth or Approvals or Admin'; else echo 'openapi conformance harness is not in this tree (track T4): see docs/plan/progress.md'; fi"
+    )
+    ;;
   *)
     echo "unknown slice '${SLICE}': add its commands to tools/scripts/verify_slice.sh" >&2
     exit 2

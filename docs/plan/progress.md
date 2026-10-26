@@ -1,7 +1,7 @@
 # Progress: Soleil Grid Hub build
 
-Executor: implementing agent. Guide: `docs/plan/00-executor-guide.md`. Slice complete: **00**
-(`docs/plan/slice-00-walking-skeleton.md`). Slice in progress: **01**
+Executor: implementing agent. Guide: `docs/plan/00-executor-guide.md`. Slices complete: **00**
+(`docs/plan/slice-00-walking-skeleton.md`) and **01**
 (`docs/plan/slice-01-identity-rbac-approvals.md`). Update this file after every task (status, commit,
 test command and its summary line) and paste the full `make verify SLICE=00` output at the end
 of the slice.
@@ -38,7 +38,7 @@ of the slice.
 | 01.9 | ApprovalService, executor registry, conflict check | done | `fbcbcf3` | `cd backend && python -m pytest tests/integration/identity/test_approvals.py -q` -> `22 passed` (the maker refused from a second session as well as the first surface; a presented `payload_hash` that differs from the stored one is 409 `approval_payload_mismatch` and the executor never runs; the executor receives the stored payload, not the decision body; a raised executor rolls the decision back and the row stays `pending`; an approver linked to the subject customer is 403 `conflict_of_interest`; a proposal past its TTL is 409 `approval_not_pending` and reads as `expired`; an approver without the executor's permission or attribute is 403 while one with it succeeds; a list shows only the kinds the caller may decide; all eleven schema actions refuse their own maker in a parametrised sweep; a rejected proposal cannot then be approved; a contract kind with no database action is 422 and a kind this caller may not propose is 403 `forbidden`); `pytest tests/integration/identity tests/integration/admin -q` -> `140 passed`; `mypy src` -> 178 files clean; `lint-imports` -> `119 kept, 0 broken` |
 | 01.10 | User administration approvals and MFA reset | done | `fbcbcf3` | `cd backend && python -m pytest tests/integration/identity/test_user_admin.py -q` -> `10 passed` (`POST /users` answers 202 with a `user_creation` approval, a `Location` and no account in `GET /users` until a second administrator approves; the maker is 403 `self_approval_forbidden`; a taken address is 409 `duplicate_resource`; a role grant is `role.grant` and only changes roles, attributes and the token version on approval, after which the target's earlier access token is 401 `token_revoked`; a site change is a proposal too and shows up in the user document only afterwards; an MFA reset leaves the factor enrolled, the secret and the unused recovery code in place and the session live until approval, then clears the secret, deletes the codes, drops the credential and revokes the session; a second administrator is required for the reset as well; `PATCH /users/{id}` writes name and locale directly and suspending kills the target's token; the last administrator cannot be demoted and a fourth cannot be granted, both 409; `GET /roles` lists the four roles with their permissions and `GET /users?role=` filters); `mypy src` -> clean; `ruff check` -> clean; `lint-imports` -> `119 kept, 0 broken` |
 | 01.11 | Customer one-time-code login with abuse controls | done | `87e4e28` (style prerequisite `648ac4a`) | `cd backend && python -m pytest tests/integration/identity/test_customer_otp.py -q` -> `9 passed` (a known and an unknown number both answer 202 with the same keys, a different `challenge_id` and the same limits, and the unknown one writes a decoy row with `max_attempts = 0` and sends nothing while the known one sends exactly one code in the requested locale; an unsolved and an already-spent proof are both 422 `proof_required`, the second proving the challenge is popped before it is checked; a prefix outside `HUB_OTP_ALLOWED_PREFIXES` is 422 `prefix_not_allowed` and writes no row; the three hourly ceilings each answer 429 with `Retry-After: 3600` at the fourth, eleventh and thirty-first request; five wrong codes kill the challenge and the sixth attempt is 401 `otp_invalid` even with the right code; a customer dormant 91 days gets a `reverify` challenge and signs in, while a `login` challenge requested before dormancy is 401 once the last sign-in is 91 days old; the session is a customer one with a 600 s access token, `type: customer` and a refresh cookie that still works at 299 s and is 401 `session_expired` at 300 s); `pytest tests/integration/identity tests/integration/admin tests/architecture -q` -> `216 passed`; `ruff check`/`ruff format --check` -> clean; `mypy` -> 219 files clean; `lint-imports` -> `119 kept, 0 broken` |
-| 01.12 | Authorization matrix, RLS context and fixtures | done | see below | `cd backend && python -m pytest tests/contract/test_auth_matrix.py -q` -> `26 passed, 12 skipped` (every one of the 33 operations `hub.urls.api` actually mounts, called with a real EdDSA token for each of the four staff roles: explicitly allowed cells never answer 401/403 and every other cell does; the 12 skips are the public operations, which a staff token proves nothing about; anonymous GETs are 401 everywhere except the public ones; a refusal writes `authz.denied` to the `auth` stream with the actor, the operation and `reason: role`, `outcome: denied` inside the hash; a customer token is still 401 `token_revoked`, and machine-only operations are 401 without a key); `pytest tests/integration/identity/test_rls_context.py -q` -> `5 passed` (a unit of work sets `app.user_id`/`app.customer_id` for exactly its transaction and the next one sees no leftover claim; two interleaved transactions on reused `hub_api` connections each see only their own customer and the same connection without the claim sees zero rows; a site-bound support agent sees only their site and an `all_sites` user sees both; a customer claim cannot read or update another customer's row); `pytest tests/integration/identity/test_fixtures.py -q` -> `5 passed` (`load_fixtures` seeds an active account per role with the published password and TOTP secret, the `finance_lead` attribute, two administrators and one active `fr` customer, is idempotent, and refuses `HUB_ENV=production` with exit code 3 without writing); `pytest tests/unit/identity tests/integration/identity tests/integration/admin tests/architecture -q` -> `230 passed`; `make lint` equivalents -> ruff, format, mypy 223 files, import-linter 119 kept, Django config checks all clean; `make contracts` equivalents -> 34 passed, traceability 0 errors, `openapi.yaml` valid |
+| 01.12 | Authorization matrix, RLS context and fixtures | done | see below | `cd backend && python -m pytest tests/contract/test_auth_matrix.py -q` -> `38 passed` (every one of the 33 operations `hub.urls.api` actually mounts, called with a real EdDSA token for each of the four staff roles: explicitly allowed cells never answer 401/403 and every other cell does; a public row asserts that a staff token leaves the anonymous answer unchanged, so the twelve public operations are exercised rather than skipped; anonymous GETs are 401 everywhere except the public ones; a refusal writes `authz.denied` to the `auth` stream with the actor, the operation and `reason: role`, `outcome: denied` inside the hash; a customer token is still 401 `token_revoked`, and machine-only operations are 401 without a key); `pytest tests/integration/identity/test_rls_context.py -q` -> `5 passed` (a unit of work sets `app.user_id`/`app.customer_id` for exactly its transaction and the next one sees no leftover claim; two interleaved transactions on reused `hub_api` connections each see only their own customer and the same connection without the claim sees zero rows; a site-bound support agent sees only their site and an `all_sites` user sees both; a customer claim cannot read or update another customer's row); `pytest tests/integration/identity/test_fixtures.py -q` -> `5 passed` (`load_fixtures` seeds an active account per role with the published password and TOTP secret, the `finance_lead` attribute, two administrators and one active `fr` customer, is idempotent, and refuses `HUB_ENV=production` with exit code 3 without writing); `pytest tests/unit/identity tests/integration/identity tests/integration/admin tests/architecture -q` -> `230 passed`; `make lint` equivalents -> ruff, format, mypy 223 files, import-linter 119 kept, Django config checks all clean; `make contracts` equivalents -> 34 passed, traceability 0 errors, `openapi.yaml` valid |
 
 ## Assumptions
 
@@ -500,6 +500,28 @@ of the slice.
   collects nothing. The contract side that does exist — `tests/contract/test_auth_matrix.py`,
   the schema-in-postgres suite, traceability and the OpenAPI validator — is green. The
   conformance harness belongs to the verification-tooling track (T4) and is listed below.
+- **01.12 the public rows of the matrix are asserted, not skipped**: the first version skipped
+  the twelve public operations, which made `verify_slice.sh` fail the slice on its own
+  "a skip is unproven" rule — correctly, since a matrix with a hole is not a matrix. A public
+  row now presents a staff token and asserts the answer is *the same as the anonymous one*: a
+  credential the operation does not need must neither help nor hurt, which is a real claim
+  about the permission class and holds for the cookie routes too (an absent cookie still
+  answers 401 with or without a token). `python -m pytest tests/contract/test_auth_matrix.py -q`
+  -> `38 passed`, no skips.
+- **slice 01 demo, defect 1: the local signing key was per process**: with the gunicorn stack
+  in `infra/docker/compose.yaml`, each worker called `Ed25519PrivateKey.generate()` at import,
+  so a token minted by one worker was unverifiable by the next and the demo saw an apparently
+  random 401 (health checks hit every worker, and a 4-worker pool makes the failure look
+  intermittent). Single-process test runs could never reproduce it. Local and test now derive
+  the pair from `LOCAL_JWT_KEY_SEED` — deterministic, therefore public, and guarded by the
+  existing `HUB_ENV not in ("local", "test")` start-up failure — so every worker of the local
+  stack signs and verifies with the same key while a real deployment still refuses to boot
+  without `HUB_JWT_PRIVATE_KEY`/`HUB_JWT_PUBLIC_KEY`.
+- **slice 01 demo, defect 2: the API image lacked `api/`**: the permission class reads
+  `api/permissions.yaml` and `api/openapi.yaml` from `HUB_CONTRACT_DIR`, and `backend/Dockerfile`
+  copied `backend/` and `db/` only. Every gated operation answered 500 while the health routes
+  (which need no contract rule) stayed green, so `make up` looked healthy. The image now copies
+  `api/`, which is what `tools/check_django_config.py` and the architecture tests already assumed.
 
 ## Open change requests
 
@@ -593,3 +615,70 @@ $ python -m pytest tests/test_stack_up.py -q -m integration
 The 503 that the first start produced was real and instructive: the readiness view answered
 `service_unavailable` because PgBouncer could not read its userlist (see the assumption above),
 which is exactly the failure the `postgres: ok` check is there to surface.
+
+### `make verify SLICE=01`, 2026-10-26
+
+`tools/scripts/verify_slice.sh 01` ran six commands in order and printed
+`Slice 01 verification PASSED (6 commands).` with exit 0, in 3 m 55 s. The list is the slice
+document's, with two deviations: the `uv run` spellings became `python -m` like slice 00 (the
+project runs from `.venv`), and step 6 is guarded because the schemathesis harness it selects
+does not exist in this tree (assumption above, track T4).
+
+```
+$ make verify SLICE=01
+==> make lint
+All checks passed!                                       # ruff check
+227 files already formatted                              # ruff format --check
+Success: no issues found in 225 source files             # mypy strict
+Contracts: 119 kept, 0 broken.                           # import-linter
+Django configuration checks passed                       # tools/check_django_config.py
+==> make contracts
+34 passed in 97.43s (0:01:37)                            # alignment, schema-in-postgres, traceability
+0 error(s), 0 warning(s)
+==> cd backend && python -m pytest tests/unit/identity tests/integration/identity tests/integration/admin tests/architecture -q
+231 passed in 71.98s (0:01:11)
+==> cd backend && python -m pytest tests/contract/test_auth_matrix.py -q
+38 passed in 8.36s
+==> cd backend && python ../tools/check_django_config.py
+Django configuration checks passed
+==> if [ -f backend/tests/contract/test_openapi_conformance.py ]; then ... else echo ...; fi
+openapi conformance harness is not in this tree (track T4): see docs/plan/progress.md
+
+Slice 01 verification PASSED (6 commands).
+```
+
+Two failures were observed first and fixed rather than worked around: `make lint` failed on an
+import order in `hub/settings/base.py`, and the matrix step reported `26 passed, 12 skipped`,
+which the script refuses (a skip is an unproven requirement — see the 01.12 assumption).
+
+### Demo script, as observed (slice 01), 2026-10-26
+
+Driver: `tools/demo_slice01.py`, reading every identity from `db/seed/test_users.json`. Run on an
+empty volume (`make reset && make up && make seed`), it printed `All ten demo steps passed.`
+
+| # | Step | Observed |
+|---|---|---|
+| 1 | `GET /api/v1/health/ready` after `make up && make seed` | `200`, `status: ok`, `checks: ['postgres', 'redis']`; `make up` left 14 containers healthy with `migrate` and `db-logins` `Exited (0)` |
+| 2 | `POST /auth/staff/login` (`finance.lead@example.test`) | `200`, `mfa_required: true`, body keys `enrollment_required, methods, mfa_required, mfa_token, mfa_token_expires_in`, and no `access_token` |
+| 3 | `POST /auth/staff/mfa/verify` with the fixture TOTP | `200`, `expires_in: 600`, `acr: mfa`, `refresh token in body: False`; `Set-Cookie: sg_refresh=<redacted>; expires=Tue, 27 Oct 2026 00:28:40 GMT; HttpOnly; Max-Age=28800; Path=/api/v1/auth; SameSite=Strict; Secure` |
+| 4 | `POST /auth/refresh` with `Origin` and `X-Hub-CSRF: 1`, then the spent cookie, then its successor | `rotate -> 200 new cookie: True`; `replay -> 401 refresh_token_reused`; `successor after reuse -> 401 refresh_token_reused` — the family dies with the replay |
+| 5 | `POST /auth/refresh` with the cookie and no `X-Hub-CSRF` | `403 csrf_check_failed`, and no rotation |
+| 6 | Both administrators: staff login + MFA, then `POST /auth/step-up` on the next TOTP step | both `200`; the demo waits for the next 30 s step so the login does not spend the code the step-up needs |
+| 7 | `POST /users` for `demo.support@example.test` as a stepped-up administrator | `202`, `Location: /api/v1/approvals/01a1790b-4a75-72f3-a584-74d32d8e86a6`, and `GET /users?q=demo.support` returns 0 rows |
+| 8 | `POST /approvals/{id}/approve` as the maker, then as the second administrator | `403 self_approval_forbidden`; then `200 executed`, and `GET /users?q=demo.support` returns exactly `['demo.support@example.test']` |
+| 9 | `GET /audit-log?stream=admin` | `200`, three entries with linked hashes: `1 approval.requested -> 43f79df5`, `2 user.create 43f79df5 -> 5ce0bba5`, `3 approval.granted 5ce0bba5 -> 5a210b58` (plus `4 audit.read`, written by this read) |
+| 10 | `GET /auth/proof-challenge` then `POST /auth/customer/otp/request` for `+243819999999` (unknown) and `+243810000123` (the seeded customer) | both `202` with the same keys `['challenge_id', 'expires_in', 'resend_after']` |
+
+Chain check on the same database:
+
+```
+$ docker compose exec -T pg-primary psql -U postgres -d hub -Atc \
+    "select (hub.verify_audit_chain('admin') is null)::text, (hub.verify_audit_chain('auth') is null)::text"
+true|true
+```
+
+The first run of this demo against the gunicorn stack failed at various points with a 401
+`unauthenticated` on a token that had just been issued and, earlier, with 500 on every gated
+operation. Both were real defects of the delivered image, not of the demo (per-worker signing
+keys, and `api/` missing from the image); they are written up as assumptions above and fixed in
+`backend/src/hub/settings/base.py` and `backend/Dockerfile`.
