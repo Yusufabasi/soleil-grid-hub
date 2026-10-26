@@ -1,0 +1,163 @@
+"""Composition of the customers module (docs/03 section 3.3): the only place naming adapters.
+
+The api and application layers see the Protocols in ``customers.contracts``; this module turns
+them into the concrete repositories, the kernel clock and the audit adapter. It sits outside
+the layer contract on purpose, exactly like ``identity.wiring``.
+
+The clock delegates to ``hub.shared.clock.current`` so a test that installs a frozen clock —
+through ``identity.wiring.use_clock`` — freezes tariff effective dates and audit timestamps
+in this module too, and so generated ids stay time-ordered with the rest of the system.
+"""
+
+from __future__ import annotations
+
+import threading
+from datetime import datetime
+from uuid import UUID
+
+from hub.customers.application.sites_plans import PlanService, SiteService
+from hub.customers.contracts import MeterCounter
+from hub.customers.infrastructure.repositories import (
+    CustomerRepository,
+    PlanRepository,
+    SiteRepository,
+)
+from hub.identity import wiring as identity_wiring
+from hub.identity.contracts import AuditLog, Principal
+from hub.identity.infrastructure.audit import HubAuditLog
+from hub.shared import clock as kernel_clock
+from hub.shared.contracts import UnitOfWork
+from hub.shared.ids import Uuid7Generator
+from hub.shared.ports import Clock
+
+__all__ = [
+    "audit_log",
+    "clock",
+    "customers",
+    "ids",
+    "meter_counter",
+    "plans",
+    "reset",
+    "sites",
+    "unit_of_work",
+    "use_meter_counter",
+]
+
+
+class _KernelClock:
+    """The process clock, read through the kernel's seam (a frozen clock in tests)."""
+
+    def now(self) -> datetime:
+        return kernel_clock.current()
+
+
+_lock = threading.RLock()
+_clock: Clock | None = None
+_ids: Uuid7Generator | None = None
+_sites: SiteService | None = None
+_plans: PlanService | None = None
+_audit: AuditLog | None = None
+_customers: CustomerRepository | None = None
+
+
+class _NoMeters:
+    """Until the meters module registers its own counter (``MetersConfig.ready``)."""
+
+    def per_site(self) -> dict[UUID, int]:
+        return {}
+
+
+# A process-level registration, like the denial recorder: ``reset`` keeps it, because it is
+# composition, not cached state. ``hub.meters`` registers its repository here at start-up so
+# this module never imports ``hub.meters.infrastructure`` (the contract allows only its
+# contracts and events).
+_counter: MeterCounter = _NoMeters()
+
+
+def reset() -> None:
+    """Drop every cached service; tests call it after changing a setting."""
+    global _clock, _ids, _sites, _plans, _audit, _customers  # noqa: PLW0603
+    with _lock:
+        _clock = _ids = _sites = _plans = _audit = _customers = None
+
+
+def clock() -> Clock:
+    global _clock  # noqa: PLW0603
+    if _clock is None:
+        with _lock:
+            if _clock is None:
+                _clock = _KernelClock()
+    return _clock
+
+
+def ids() -> Uuid7Generator:
+    global _ids  # noqa: PLW0603
+    if _ids is None:
+        with _lock:
+            if _ids is None:
+                _ids = Uuid7Generator(clock())
+    return _ids
+
+
+def audit_log() -> AuditLog:
+    global _audit  # noqa: PLW0603
+    if _audit is None:
+        with _lock:
+            if _audit is None:
+                _audit = HubAuditLog()
+    return _audit
+
+
+def customers() -> CustomerRepository:
+    global _customers  # noqa: PLW0603
+    if _customers is None:
+        with _lock:
+            if _customers is None:
+                _customers = CustomerRepository()
+    return _customers
+
+
+def use_meter_counter(counter: MeterCounter) -> None:
+    """Install the meter counter; called by ``hub.meters`` at app start-up."""
+    global _counter  # noqa: PLW0603
+    _counter = counter
+
+
+def meter_counter() -> MeterCounter:
+    return _counter
+
+
+def unit_of_work(principal: Principal | None = None) -> UnitOfWork:
+    """A transaction that announces the caller (``app.user_id``), as identity does."""
+    return identity_wiring.unit_of_work(principal)
+
+
+def sites() -> SiteService:
+    global _sites  # noqa: PLW0603
+    if _sites is None:
+        with _lock:
+            if _sites is None:
+                _sites = SiteService(
+                    clock=clock(),
+                    ids=ids(),
+                    sites=SiteRepository(),
+                    meters=meter_counter(),
+                    audit=audit_log(),
+                    unit_of_work=unit_of_work,
+                )
+    return _sites
+
+
+def plans() -> PlanService:
+    global _plans  # noqa: PLW0603
+    if _plans is None:
+        with _lock:
+            if _plans is None:
+                _plans = PlanService(
+                    clock=clock(),
+                    ids=ids(),
+                    plans=PlanRepository(),
+                    audit=audit_log(),
+                    unit_of_work=unit_of_work,
+                )
+    return _plans

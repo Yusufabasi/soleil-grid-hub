@@ -9,5 +9,6 @@ handler500 = "hub.shared.api.problem.handler500"
 urlpatterns = [
     path("api/v1/", include("hub.shared.api.urls")),
     path("api/v1/", include("hub.identity.api.urls")),
+    path("api/v1/", include("hub.customers.api.urls")),
     path("api/v1/", include("hub.admin.api.urls")),
 ]

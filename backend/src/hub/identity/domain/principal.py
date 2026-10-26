@@ -40,6 +40,9 @@ class Principal:
     permissions: frozenset[str] = frozenset()
     scopes: frozenset[str] = frozenset()
     site_ids: frozenset[UUID] = frozenset()
+    # `users.all_sites` (docs/03 2.2): a scope fact, read from the database with the roles,
+    # so a site-scoped module never has to ask identity again. Not a claim and not a grant.
+    all_sites: bool = False
     customer_id: UUID | None = None
     session_id: UUID | None = None
     token_version: int = 0
