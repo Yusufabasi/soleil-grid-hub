@@ -18,6 +18,7 @@ from uuid import UUID
 
 from django.conf import settings
 
+from hub.customers.application.csv_import import CustomerCsvImporter
 from hub.customers.application.customers import CustomerService
 from hub.customers.application.sites_plans import PlanService, SiteService
 from hub.customers.application.tariffs import TariffChangeExecutor, TariffService
@@ -40,12 +41,14 @@ from hub.identity.infrastructure.audit import HubAuditLog
 from hub.shared import clock as kernel_clock
 from hub.shared.contracts import UnitOfWork
 from hub.shared.ids import Uuid7Generator
+from hub.shared.imports import register_importer
 from hub.shared.ports import Clock
 
 __all__ = [
     "audit_log",
     "balance_probe",
     "clock",
+    "customer_csv_importer",
     "customer_service",
     "customers",
     "ids",
@@ -54,6 +57,7 @@ __all__ = [
     "plans",
     "site_store",
     "register_approval_executors",
+    "register_csv_import",
     "reset",
     "sites",
     "tariffs",
@@ -253,6 +257,35 @@ def register_approval_executors() -> None:
             clock=clock(), ids=ids(), tariffs=TariffRepository(), audit=audit_log()
         ),
     )
+
+
+def customer_csv_importer() -> CustomerCsvImporter:
+    """The ``customers`` arm of ``manage.py import_registry`` (Task 02.8).
+
+    Built from the same stores, clock and audit log the HTTP use cases use, so an imported
+    customer is indistinguishable from a typed one apart from its audit action. The actor is
+    resolved by `identity` from ``--actor-email``: a command has no token to present.
+    """
+    return CustomerCsvImporter(
+        clock=clock(),
+        ids=ids(),
+        customers=customers(),
+        sites=SiteRepository(),
+        plans=PlanRepository(),
+        audit=audit_log(),
+        unit_of_work=unit_of_work,
+        resolve_actor=identity_wiring.actor_for_email,
+        default_phone_prefix=str(settings.HUB_DEFAULT_PHONE_PREFIX),
+    )
+
+
+def register_csv_import() -> None:
+    """Publish this module's importer to the kernel's command (``CustomersConfig.ready``).
+
+    Registration rather than import: ``hub.shared`` may not import a business module, so the
+    command asks the kernel registry which kinds exist instead of naming this module.
+    """
+    register_importer(customer_csv_importer())
 
 
 class _NoWallet:

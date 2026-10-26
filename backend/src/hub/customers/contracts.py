@@ -152,13 +152,19 @@ class EnergyQuote:
 
 
 class CustomerStore(Protocol):
-    """The one lookup a neighbour needs to validate a reference to a customer.
+    """The lookups a neighbour or a bulk import needs, without the registry's row shape.
 
-    ``registry.directory.RegistryFactsAdapter`` is the only implementation that crosses a
+    ``meters.application.directory.RegistryFactsAdapter`` is the implementation that crosses a
     module boundary; the use cases use their own, wider protocol inside ``application``.
     """
 
+    def add(self, customer: CustomerRow) -> None: ...
+
     def get(self, customer_id: UUID) -> CustomerRow | None: ...
+
+    def find_by_phone(self, phone_e164: str) -> CustomerRow | None: ...
+
+    def find_by_external_ref(self, external_ref: str) -> CustomerRow | None: ...
 
 
 class CustomerDirectory(Protocol):
@@ -211,6 +217,8 @@ class PlanStore(Protocol):
     def get(self, plan_id: UUID) -> PlanRow | None: ...
 
     def update(self, plan: PlanRow) -> None: ...
+
+    def find_by_code(self, code: str) -> PlanRow | None: ...
 
     def list_all(self) -> list[PlanRow]: ...
 

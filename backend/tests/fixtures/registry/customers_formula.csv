@@ -1,0 +1,2 @@
+external_ref,full_name,phone,email,locale,site_code,plan_code
+EXT-201,=cmd()|' /C calc'!A0,0812345699,formula@example.test,en,KIN,BASIC

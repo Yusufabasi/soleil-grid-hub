@@ -22,17 +22,21 @@ from uuid import UUID
 
 from hub.identity import wiring as identity_wiring
 from hub.identity.contracts import AuditLog, Principal
+from hub.meters.application.csv_import import MeterCsvImporter
 from hub.meters.application.registry import CreditProbe, MeterService
 from hub.meters.contracts import CustomerFacts, RegistryFacts, SiteFacts
 from hub.meters.infrastructure.repositories import MeterRepository
 from hub.shared import clock as kernel_clock
 from hub.shared.contracts import UnitOfWork
 from hub.shared.ids import Uuid7Generator
+from hub.shared.imports import register_importer
 from hub.shared.ports import Clock
 
 __all__ = [
+    "csv_importer",
     "ids",
     "meter_service",
+    "register_csv_import",
     "registry_facts",
     "repository",
     "reset",
@@ -56,6 +60,12 @@ class _NoRegistry:
         return None
 
     def site(self, site_id: UUID) -> SiteFacts | None:  # noqa: ARG002
+        return None
+
+    def site_by_code(self, code: str) -> SiteFacts | None:  # noqa: ARG002
+        return None
+
+    def customer_by_external_ref(self, external_ref: str) -> CustomerFacts | None:  # noqa: ARG002
         return None
 
 
@@ -148,6 +158,12 @@ class _RegistryRef:
     def site(self, site_id: UUID) -> SiteFacts | None:
         return _registry.site(site_id)
 
+    def site_by_code(self, code: str) -> SiteFacts | None:
+        return _registry.site_by_code(code)
+
+    def customer_by_external_ref(self, external_ref: str) -> CustomerFacts | None:
+        return _registry.customer_by_external_ref(external_ref)
+
 
 class _CreditRef:
     """Same indirection for the probe: slice 06 may bind it after this service exists."""
@@ -171,3 +187,25 @@ def meter_service() -> MeterService:
                     unit_of_work=unit_of_work,
                 )
     return _service
+
+
+def csv_importer() -> MeterCsvImporter:
+    """The ``meters`` arm of ``manage.py import_registry`` (Task 02.8).
+
+    The registry facts are read through the ref, so a customer suspended since start-up is
+    refused a meter now: nothing here caches what `customers` owns.
+    """
+    return MeterCsvImporter(
+        clock=clock(),
+        ids=ids(),
+        meters=repository(),
+        registry=_RegistryRef(),
+        audit=_audit(),
+        unit_of_work=unit_of_work,
+        resolve_actor=identity_wiring.actor_for_email,
+    )
+
+
+def register_csv_import() -> None:
+    """Publish this module's importer to the kernel's command (``MetersConfig.ready``)."""
+    register_importer(csv_importer())

@@ -254,6 +254,15 @@ class PlanRepository:
                 [plan.name, plan.min_topup_minor, plan.max_topup_minor, plan.status, plan.id],
             )
 
+    def find_by_code(self, code: str) -> PlanRow | None:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"SELECT {_PLAN_COLUMNS} FROM hub.plans WHERE code = %s",  # noqa: S608
+                [code],
+            )
+            row = cursor.fetchone()
+        return _plan(row) if row is not None else None
+
     def list_all(self) -> list[PlanRow]:
         with connection.cursor() as cursor:
             cursor.execute(f"SELECT {_PLAN_COLUMNS} FROM hub.plans ORDER BY code")  # noqa: S608
@@ -410,6 +419,16 @@ class CustomerRepository:
                 f"SELECT {_CUSTOMER_COLUMNS} FROM hub.customers "  # noqa: S608
                 "WHERE id = %s AND deleted_at IS NULL",
                 [customer_id],
+            )
+            row = cursor.fetchone()
+        return _customer(row) if row is not None else None
+
+    def find_by_external_ref(self, external_ref: str) -> CustomerRow | None:
+        """The idempotency key of the import: a rerun finds its own rows and skips them."""
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"SELECT {_CUSTOMER_COLUMNS} FROM hub.customers WHERE external_ref = %s",  # noqa: S608
+                [external_ref],
             )
             row = cursor.fetchone()
         return _customer(row) if row is not None else None

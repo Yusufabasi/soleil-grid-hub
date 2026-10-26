@@ -55,6 +55,7 @@ from hub.shared.redis import get_store
 from hub.shared.uow import DjangoUnitOfWork, PrincipalContext, UnitOfWork
 
 __all__ = [
+    "actor_for_email",
     "add_approval_executor",
     "approval_registry",
     "approvals",
@@ -193,6 +194,24 @@ def users() -> UserRepository:
             if _users is None:
                 _users = UserRepository(store())
     return _users
+
+
+def actor_for_email(email: str) -> Principal:
+    """The caller a management command acts as: an existing, active user, proven by nobody.
+
+    A command has no request and no token, so the identity it writes to the audit trail has to
+    be resolved from the address the operator typed (``--actor-email``). The principal is a
+    real one — roles, sites and locale are read from the database — because the use case it
+    drives checks them; ``acr`` is ``mfa`` so a step-up rule would not be satisfied by a script
+    that nobody watched. An unknown or inactive address raises ``ImportRefused``: the command
+    refuses to run rather than inventing an actor.
+    """
+    from hub.shared.imports import ImportRefused  # noqa: PLC0415
+
+    record = users().find_by_email(email.strip().lower())
+    if record is None or record.status != "active":
+        raise ImportRefused(f"no active user with the address {email!r}")
+    return users().build_principal(record.id, session_id=None, auth_time=clock().now(), acr="mfa")
 
 
 def sessions() -> SessionService:

@@ -105,6 +105,10 @@ class RegistryFacts(Protocol):
 
     def site(self, site_id: UUID) -> SiteFacts | None: ...
 
+    def site_by_code(self, code: str) -> SiteFacts | None: ...
+
+    def customer_by_external_ref(self, external_ref: str) -> CustomerFacts | None: ...
+
 
 class MeterStore(Protocol):
     """Persistence of ``hub.meters`` as the registry use cases need it (no SQL here).

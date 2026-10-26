@@ -1,0 +1,3 @@
+external_ref,full_name,phone,email,locale,site_code,plan_code
+EXT-001,Amani Mbuyi,0812345678,amani@example.test,fr,KIN,BASIC
+EXT-002,Chantal Ilunga,+243 81 000 0302,chantal@example.test,en,KIN,BASIC

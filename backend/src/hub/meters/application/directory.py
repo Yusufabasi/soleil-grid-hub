@@ -37,3 +37,17 @@ class RegistryFactsAdapter:
         if row is None:
             return None
         return SiteFacts(id=row.id, status=row.status)
+
+    def site_by_code(self, code: str) -> SiteFacts | None:
+        """A site as a bulk file names it: stable, human-chosen, and unique."""
+        row = self._sites.find_by_code(code) if code else None
+        if row is None:
+            return None
+        return SiteFacts(id=row.id, status=row.status)
+
+    def customer_by_external_ref(self, external_ref: str) -> CustomerFacts | None:
+        """The registry's idempotency key, which is how a meter file names its owner."""
+        row = self._customers.find_by_external_ref(external_ref) if external_ref else None
+        if row is None:
+            return None
+        return CustomerFacts(id=row.id, site_id=row.site_id, status=row.status)
