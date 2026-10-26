@@ -134,6 +134,8 @@ def refresh_view(request: HttpRequest) -> HttpResponse:
         session_id=rotation.session_id,
         auth_time=rotation.auth_time,
         acr=rotation.acr,
+        # A customer signed in with the code alone; a staff session had a password first.
+        amr=("otp",) if rotation.acr == "otp" else ("pwd", "otp"),
     )
     document = token_pair_document(
         access_token=access,
@@ -163,9 +165,16 @@ def logout_view(request: HttpRequest) -> HttpResponse:
 
 
 def _principal_for(rotation: Any) -> Principal:
-    """The caller a rotated session belongs to (staff today; customers in Task 01.11)."""
+    """The caller a rotated session belongs to: a staff account, or a customer."""
     if rotation.user_id is None:
-        raise Unauthenticated()
+        if rotation.customer_id is None:
+            raise Unauthenticated()
+        return wiring.customer_otp().principal_for(
+            rotation.customer_id,
+            session_id=rotation.session_id,
+            auth_time=rotation.auth_time,
+            acr=rotation.acr,
+        )
     return wiring.users().build_principal(
         rotation.user_id,
         session_id=rotation.session_id,

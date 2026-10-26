@@ -17,6 +17,11 @@ from hub.identity.api.approval_views import (
 )
 from hub.identity.api.cookie_views import logout_view, refresh_view
 from hub.identity.api.oidc_views import oidc_callback_view, oidc_start_view
+from hub.identity.api.otp_views import (
+    CustomerOtpRequestView,
+    CustomerOtpVerifyView,
+    ProofChallengeView,
+)
 from hub.identity.api.user_views import (
     RoleCollectionView,
     UserCollectionView,
@@ -90,6 +95,17 @@ urlpatterns: list[Any] = [
         "approvals/<uuid:approval_id>/reject",
         ApprovalRejectView.as_view(),
         name="rejectApproval",
+    ),
+    path("auth/proof-challenge", ProofChallengeView.as_view(), name="getProofChallenge"),
+    path(
+        "auth/customer/otp/request",
+        CustomerOtpRequestView.as_view(),
+        name="requestCustomerOtp",
+    ),
+    path(
+        "auth/customer/otp/verify",
+        CustomerOtpVerifyView.as_view(),
+        name="verifyCustomerOtp",
     ),
     path("users", UserCollectionView.as_view(), name="listUsers"),
     path("users/<uuid:user_id>", UserDetailView.as_view(), name="getUser"),

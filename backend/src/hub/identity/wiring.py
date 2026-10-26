@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 from django.conf import settings
 
 from hub.identity.application.approvals import ApprovalService, ExecutorRegistry
+from hub.identity.application.customer_otp import CustomerOtpService, OtpLimits
 from hub.identity.application.local_login import (
     EnrollmentService,
     LocalLogin,
@@ -25,6 +26,7 @@ from hub.identity.application.local_login import (
     MfaService,
 )
 from hub.identity.application.oidc import OidcLogin
+from hub.identity.application.proof import ProofService
 from hub.identity.application.sessions import SessionLimits, SessionService
 from hub.identity.application.step_up import StepUpService
 from hub.identity.application.tokens import AccessTokenService
@@ -38,6 +40,9 @@ from hub.identity.application.webauthn import WebauthnService
 from hub.identity.contracts import AuditLog, Principal
 from hub.identity.infrastructure.approvals import ApprovalRepository
 from hub.identity.infrastructure.audit import HubAuditLog
+from hub.identity.infrastructure.crypto import hmac_phone
+from hub.identity.infrastructure.customer_otp import CustomerDirectory, OtpRepository
+from hub.identity.infrastructure.notifications import LoggingNotifier
 from hub.identity.infrastructure.repositories import SessionRepository, UserRepository
 from hub.identity.infrastructure.user_admin import UserAdminRepository
 from hub.shared import clock as kernel_clock
@@ -53,11 +58,13 @@ __all__ = [
     "approvals",
     "audit_log",
     "clock",
+    "customer_otp",
     "ids",
     "enrollment",
     "local_login",
     "mfa",
     "oidc",
+    "proof",
     "reset",
     "sessions",
     "step_up",
@@ -86,6 +93,9 @@ _step_up: StepUpService | None = None
 _approvals: ApprovalService | None = None
 _approval_registry: ExecutorRegistry | None = None
 _user_admin: UserAdminService | None = None
+_proof: ProofService | None = None
+_customer_otp: CustomerOtpService | None = None
+_notifier: LoggingNotifier | None = None
 
 
 def reset() -> None:
@@ -93,10 +103,12 @@ def reset() -> None:
     global _clock, _ids, _store, _tokens, _users, _sessions, _audit_log  # noqa: PLW0603
     global _local_login, _mfa, _enrollment, _webauthn, _oidc, _step_up  # noqa: PLW0603
     global _approvals, _approval_registry, _user_admin  # noqa: PLW0603
+    global _proof, _customer_otp, _notifier  # noqa: PLW0603
     with _lock:
         _clock = _ids = _store = _tokens = _users = _sessions = _audit_log = None
         _local_login = _mfa = _enrollment = _webauthn = _oidc = _step_up = None
         _approvals = _approval_registry = _user_admin = None
+        _proof = _customer_otp = _notifier = None
 
 
 def use_clock(clock: Clock) -> None:
@@ -326,9 +338,7 @@ def _build_registry() -> ExecutorRegistry:
         "user_creation",
         required_permission="user.admin",
         required_attribute=None,
-        execute=CreateUserExecutor(
-            store=user_store, audit=audit_log(), clock=clock(), ids=ids()
-        ),
+        execute=CreateUserExecutor(store=user_store, audit=audit_log(), clock=clock(), ids=ids()),
     )
     registry.register(
         "role_grant",
@@ -347,6 +357,59 @@ def _build_registry() -> ExecutorRegistry:
         ),
     )
     return registry
+
+
+def proof() -> ProofService:
+    """Proof of work in front of the one-time-code endpoint (D-21)."""
+    global _proof  # noqa: PLW0603
+    if _proof is None:
+        with _lock:
+            if _proof is None:
+                _proof = ProofService(
+                    store=store(),
+                    clock=clock(),
+                    difficulty=int(settings.HUB_POW_DIFFICULTY_BITS),
+                )
+    return _proof
+
+
+def notifier() -> LoggingNotifier:
+    """Where codes would be sent: a recording adapter until a gateway is configured."""
+    global _notifier  # noqa: PLW0603
+    if _notifier is None:
+        with _lock:
+            if _notifier is None:
+                _notifier = LoggingNotifier()
+    return _notifier
+
+
+def customer_otp() -> CustomerOtpService:
+    """Customer sign-in by one-time code, with the three hourly ceilings."""
+    global _customer_otp  # noqa: PLW0603
+    if _customer_otp is None:
+        with _lock:
+            if _customer_otp is None:
+                _customer_otp = CustomerOtpService(
+                    clock=clock(),
+                    ids=ids(),
+                    store=store(),
+                    proofs=proof(),
+                    otp_store=OtpRepository(),
+                    customers=CustomerDirectory(),
+                    notifier=notifier(),
+                    sessions=sessions(),
+                    tokens=tokens(),
+                    phone_hmac=hmac_phone,
+                    limits=OtpLimits(
+                        per_phone=int(settings.HUB_OTP_PER_PHONE_HOURLY),
+                        per_ip=int(settings.HUB_OTP_PER_IP_HOURLY),
+                        per_network=int(settings.HUB_OTP_PER_NETWORK_HOURLY),
+                    ),
+                    allowed_prefixes=tuple(settings.HUB_OTP_ALLOWED_PREFIXES),
+                    ttl_seconds=int(settings.HUB_OTP_TTL_SECONDS),
+                    dormant_days=int(settings.HUB_OTP_DORMANT_DAYS),
+                )
+    return _customer_otp
 
 
 def user_admin() -> UserAdminService:
