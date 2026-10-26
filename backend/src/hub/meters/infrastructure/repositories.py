@@ -249,7 +249,9 @@ class MeterRegistryImpl:
         meter = self._repository.get(meter_id)
         if meter is None:
             raise NotFound()
+        # The reason is both the code a client branches on and the text a person reads, so
+        # each refusal carries its own message key rather than one generic sentence.
         if meter.status == "decommissioned":
-            raise MeterNotUsable("meter_decommissioned")
+            raise MeterNotUsable("meter_decommissioned", message_key="meter_decommissioned")
         if meter.customer_id != customer_id:
-            raise MeterNotUsable("meter_not_owned")
+            raise MeterNotUsable("meter_not_owned", message_key="meter_not_owned")

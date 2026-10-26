@@ -1,0 +1,8 @@
+{
+  "serial_conflict": "Un compteur avec ce numéro de série est déjà enregistré.",
+  "meter_has_credit": "Le compteur porte encore du crédit ; il ne peut pas encore être mis hors service.",
+  "meter_not_usable": "Ce compteur ne peut pas être utilisé pour cette opération.",
+  "meter_decommissioned": "Ce compteur a été mis hors service et ne peut plus être utilisé.",
+  "meter_not_owned": "Ce compteur n'est pas attribué au client de cette opération.",
+  "site_mismatch": "Le client et le compteur appartiennent à des sites différents."
+}

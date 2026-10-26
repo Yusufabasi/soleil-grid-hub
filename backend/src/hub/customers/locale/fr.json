@@ -1,0 +1,8 @@
+{
+  "duplicate_phone": "Ce numéro de téléphone appartient déjà à un client.",
+  "invalid_phone_number": "Le numéro de téléphone n'est pas un numéro international (E.164) valide.",
+  "customer_has_balance": "Le client a encore un solde dans son portefeuille ; réglez-le avant de fermer le compte.",
+  "plan_locked": "Les montants d'un forfait ne peuvent être modifiés que tant qu'il est en brouillon.",
+  "invalid_tariff": "Cette version du tarif n'est pas acceptable ; vérifiez la date d'effet et le prix.",
+  "tariff_change_too_large": "Une révision tarifaire ne peut pas modifier le prix de plus de 25 pour cent."
+}

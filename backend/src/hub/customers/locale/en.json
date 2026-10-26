@@ -1,0 +1,8 @@
+{
+  "duplicate_phone": "This phone number already belongs to a customer.",
+  "invalid_phone_number": "The phone number is not a valid international (E.164) number.",
+  "customer_has_balance": "The customer still has a wallet balance; settle it before closing the account.",
+  "plan_locked": "The amounts of a plan can only be changed while it is a draft.",
+  "invalid_tariff": "This tariff version is not acceptable; check the effective date and the price.",
+  "tariff_change_too_large": "A tariff revision may not change the price by more than 25 percent."
+}

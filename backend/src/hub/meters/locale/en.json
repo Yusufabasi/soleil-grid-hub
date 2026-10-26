@@ -1,0 +1,8 @@
+{
+  "serial_conflict": "A meter with this serial number is already registered.",
+  "meter_has_credit": "The meter still carries credit; it cannot be decommissioned yet.",
+  "meter_not_usable": "This meter cannot be used for that operation.",
+  "meter_decommissioned": "This meter has been decommissioned and can no longer be used.",
+  "meter_not_owned": "This meter is not assigned to the customer of this operation.",
+  "site_mismatch": "The customer and the meter belong to different sites."
+}

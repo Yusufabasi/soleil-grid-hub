@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from django.apps import AppConfig
 
 
@@ -17,5 +19,9 @@ class CustomersConfig(AppConfig):
         Nothing touches the database at start-up; the executor runs when a decision is made.
         """
         from hub.customers.wiring import register_approval_executors  # noqa: PLC0415
+        from hub.shared.api.problem import register_catalogue  # noqa: PLC0415
 
         register_approval_executors()
+        # The registry's own strings (English and French), merged into the one problem
+        # handler: `hub.shared` may not import this module, so the module registers them.
+        register_catalogue(Path(__file__).parent / "locale")

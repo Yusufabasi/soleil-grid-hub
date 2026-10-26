@@ -13,6 +13,7 @@ import json
 import logging
 from collections.abc import Mapping
 from http import HTTPStatus
+from pathlib import Path
 from typing import Any
 
 from django.conf import settings
@@ -38,6 +39,8 @@ __all__ = [
     "handler404",
     "handler500",
     "problem_response",
+    "register_catalogue",
+    "register_messages",
     "retry_after",
     "to_problem",
 ]
@@ -99,6 +102,16 @@ MESSAGES: dict[str, dict[str, str]] = {
         "conflict_of_interest": "You are linked to the customer this decision concerns.",
         "approval_payload_mismatch": "The payload changed since it was proposed.",
         "approval_not_pending": "This approval has already been decided or has expired.",
+        # Optimistic concurrency and lifecycle codes, raised by the kernel and by more than
+        # one module (customers and meters share both), so they live here once.
+        "precondition_failed": "The resource changed since it was read; reload it and retry.",
+        "precondition_required": "This change requires an If-Match header with the current ETag.",
+        "version_conflict": (
+            "Another write changed this resource at the same time; reload it and retry."
+        ),
+        "invalid_state_transition": (
+            "The resource cannot move to that state from its current one."
+        ),
     },
     "fr": {
         "validation_error": "Le contenu de la requête n'a pas passé la validation.",
@@ -132,6 +145,19 @@ MESSAGES: dict[str, dict[str, str]] = {
         "conflict_of_interest": "Vous êtes lié au client concerné par cette décision.",
         "approval_payload_mismatch": "La charge utile a changé depuis la proposition.",
         "approval_not_pending": "Cette approbation a déjà été décidée ou a expiré.",
+        "precondition_failed": (
+            "La ressource a changé depuis sa lecture ; rechargez-la et réessayez."
+        ),
+        "precondition_required": (
+            "Cette modification exige un en-tête If-Match contenant l'ETag actuel."
+        ),
+        "version_conflict": (
+            "Une autre écriture a modifié cette ressource en même temps ; "
+            "rechargez-la et réessayez."
+        ),
+        "invalid_state_transition": (
+            "La ressource ne peut pas passer à cet état depuis son état actuel."
+        ),
     },
 }
 
@@ -140,6 +166,35 @@ _GENERIC_DETAIL: dict[str, str] = {
     "en": "The request could not be completed.",
     "fr": "La requête n'a pas pu être traitée.",
 }
+
+
+def register_messages(language: str, messages: Mapping[str, str]) -> None:
+    """Merge one module's catalogue into the handler's table (docs/05 5, FR-16).
+
+    Modules own their strings and this module owns the lookup: `hub.shared` may not import a
+    business module, so each one registers its own keys from its ``ready()`` hook. A later
+    registration for the same key wins, which is what lets a module correct a text without
+    touching the kernel. Blank values are refused rather than allowed to blank out a message.
+    """
+    cleaned = {key: text for key, text in messages.items() if text and text.strip()}
+    if not cleaned:
+        return
+    MESSAGES.setdefault(language, {}).update(cleaned)
+
+
+def register_catalogue(directory: Path) -> None:
+    """Register every ``<language>.json`` in ``directory`` as that language's messages.
+
+    A malformed file raises at start-up: a catalogue that silently half-loaded would surface
+    as one English sentence in a French UI, which is exactly the bug this task exists to fix.
+    """
+    for path in sorted(directory.glob("*.json")):
+        loaded: Any = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(loaded, dict) or not all(
+            isinstance(key, str) and isinstance(value, str) for key, value in loaded.items()
+        ):
+            raise ValueError(f"{path} is not a flat object of message_key -> text")
+        register_messages(path.stem, loaded)
 
 
 def _language(accept_language: str | None) -> str:

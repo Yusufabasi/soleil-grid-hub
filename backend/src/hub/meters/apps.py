@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from django.apps import AppConfig
 
 
@@ -20,6 +22,10 @@ class MetersConfig(AppConfig):
         from hub.meters.application.directory import RegistryFactsAdapter  # noqa: PLC0415
         from hub.meters.infrastructure.repositories import MeterRepository  # noqa: PLC0415
         from hub.meters.wiring import use_registry_facts  # noqa: PLC0415
+        from hub.shared.api.problem import register_catalogue  # noqa: PLC0415
 
         use_meter_counter(MeterRepository())
         use_registry_facts(RegistryFactsAdapter(customers=customer_store(), sites=site_store()))
+        # The meter refusals a credit path reports (English and French): a top-up that is
+        # told "meter_decommissioned" has to say so in the caller's language.
+        register_catalogue(Path(__file__).parent / "locale")
