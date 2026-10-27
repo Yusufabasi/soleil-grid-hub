@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://soleilgrid.example/schemas/provider_stub/webhook_envelope.schema.json",
+  "title": "WebhookEnvelope",
+  "description": "What the double signs and posts to the hub, copied from the frozen API contract. Generated from api/openapi.yaml by tools/scripts/sync_stub_schemas.py — do not edit by hand; run the script instead.",
+  "x-source": "api/openapi.yaml#/components/schemas/WebhookEnvelope",
+  "type": "object",
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "description": "Provider-unique event id; the idempotency key of the whole webhook."
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "payment.confirmed",
+        "payment.failed",
+        "payment.reversed"
+      ]
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "provider_reference": {
+          "type": "string"
+        },
+        "external_reference": {
+          "type": "string",
+          "format": "uuid",
+          "description": "The top_up id we sent when initiating."
+        },
+        "amount": {
+          "type": "object",
+          "properties": {
+            "amount_minor": {
+              "type": "integer",
+              "description": "Integer count of minor units (cents for USD, centimes for CDF). Never a float.",
+              "format": "int64"
+            },
+            "currency": {
+              "type": "string",
+              "enum": [
+                "USD",
+                "CDF"
+              ]
+            }
+          },
+          "required": [
+            "amount_minor",
+            "currency"
+          ],
+          "description": "Money as integer minor units plus ISO-4217 currency. Amounts in requests and ledger lines are positive; the sign is carried by `direction` (D-03).",
+          "examples": [
+            {
+              "amount_minor": 500,
+              "currency": "USD"
+            }
+          ]
+        },
+        "payer_msisdn": {
+          "type": "string",
+          "pattern": "^\\+[1-9][0-9]{7,14}$",
+          "description": "E.164 phone number"
+        },
+        "failure_code": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider_reference",
+        "external_reference",
+        "amount"
+      ]
+    }
+  },
+  "required": [
+    "event_id",
+    "type",
+    "occurred_at",
+    "data"
+  ],
+  "examples": [
+    {
+      "event_id": "evt_9f31c2",
+      "type": "payment.confirmed",
+      "occurred_at": "2026-10-24T08:15:30Z",
+      "data": {
+        "provider_reference": "MP241024.0815.A77",
+        "external_reference": "0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f0003",
+        "amount": {
+          "amount_minor": 500,
+          "currency": "USD"
+        },
+        "payer_msisdn": "+243810000111"
+      }
+    }
+  ]
+}

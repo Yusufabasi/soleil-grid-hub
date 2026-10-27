@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://soleilgrid.example/schemas/provider_stub/collection_ack.schema.json",
+  "title": "CollectionAck",
+  "description": "The 202 body of POST /providers/{provider}/collections. The same reference must always answer with the same provider_reference: initiation is idempotent on the caller's key.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["provider_reference", "reference", "status"],
+  "properties": {
+    "provider_reference": {
+      "type": "string",
+      "pattern": "^MP[A-F0-9]{10}$",
+      "description": "Derived from `reference`, so it survives a restart of the double."
+    },
+    "reference": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pending", "successful", "failed", "reversed"]
+    }
+  }
+}

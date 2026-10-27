@@ -1,0 +1,35 @@
+[project]
+name = "provider-stub"
+version = "0.1.0"
+description = "A mobile-money provider double: collections, status pulls, signed webhooks with programmable faults, and statements"
+requires-python = ">=3.12"
+# `httpx` only, on purpose: the double has to make one kind of outbound call (a signed POST to
+# the hub) and needs explicit timeouts while doing it. Everything else is the standard library,
+# so the image the compose stack runs stays trivially buildable and the tool imports nothing
+# from the hub.
+dependencies = ["httpx>=0.28"]
+
+# The test extra of the slice document, expressed as a uv dependency group: this package is
+# locked and synced with uv (see the Makefile), and `uv sync` installs the `dev` group, so a
+# checkout gets the suites by default.
+#
+# Both dependencies are about the contract, and neither is a runtime dependency of the double:
+# `jsonschema` validates every document the double produces against `schemas/`, and `pyyaml` lets
+# the contract test parse `api/openapi.yaml` to prove the one schema that is in the frozen API is
+# still the API's (the repository already depends on PyYAML for the same reason).
+[dependency-groups]
+dev = ["pytest>=8.3", "jsonschema>=4.23", "pyyaml>=6.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/provider_stub"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+# The package lives under `src/` and is not installed for the test run: the suites import it
+# from the checkout, so a broken wheel is never mistaken for a broken module.
+pythonpath = ["src"]

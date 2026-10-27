@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://soleilgrid.example/schemas/provider_stub/collection_status.schema.json",
+  "title": "CollectionStatus",
+  "description": "The body of GET /providers/{provider}/collections/{provider_reference}. The hub pulls this before crediting an amount at or above its threshold, and the pending_unknown sweeper reads it, so a status the double reports must agree with the webhooks it has already sent.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["provider_reference", "reference", "status", "amount", "payer_msisdn", "updated_at"],
+  "properties": {
+    "provider_reference": {
+      "type": "string",
+      "pattern": "^MP[A-F0-9]{10}$"
+    },
+    "reference": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pending", "successful", "failed", "reversed"]
+    },
+    "amount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["amount_minor", "currency"],
+      "properties": {
+        "amount_minor": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "currency": {
+          "type": "string",
+          "enum": ["USD", "CDF"]
+        }
+      }
+    },
+    "payer_msisdn": {
+      "type": "string",
+      "pattern": "^\\+[1-9][0-9]{7,14}$"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

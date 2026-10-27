@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://soleilgrid.example/schemas/provider_stub/collection_request.schema.json",
+  "title": "CollectionRequest",
+  "description": "What the hub's ProviderGateway adapter sends to POST /providers/{provider}/collections. Not in the frozen OpenAPI (the provider-side API is the double's), so this file is the contract of record for slice 04's adapter and slice 14's reader.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["reference", "amount", "payer_msisdn"],
+  "properties": {
+    "reference": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The caller's idempotency key; the top-up uuid, so a retry names the same charge."
+    },
+    "amount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["amount_minor", "currency"],
+      "properties": {
+        "amount_minor": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Integer minor units. Never a float."
+        },
+        "currency": {
+          "type": "string",
+          "enum": ["USD", "CDF"]
+        }
+      }
+    },
+    "payer_msisdn": {
+      "type": "string",
+      "pattern": "^\\+[1-9][0-9]{7,14}$",
+      "description": "E.164; the synthetic range the seeded data uses."
+    }
+  }
+}

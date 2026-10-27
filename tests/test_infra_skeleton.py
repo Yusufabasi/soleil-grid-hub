@@ -88,6 +88,67 @@ def test_makefile_declares_required_targets():
     assert REQUIRED_TARGETS <= targets, sorted(REQUIRED_TARGETS - targets)
 
 
+def sync_env(example: Path, env: Path, *extra: str) -> subprocess.CompletedProcess[str]:
+    """Run the `.env` top-up the `env` target calls, against the given pair of files."""
+    return subprocess.run(  # noqa: S603 - fixed argv, no shell
+        [
+            "python3",
+            str(ROOT / "tools" / "scripts" / "sync_env.py"),
+            "--example",
+            str(example),
+            "--env",
+            str(env),
+            *extra,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_env_top_up_is_additive_and_idempotent(tmp_path: Path):
+    """A `.env` written before a slice is topped up with that slice's variables, and only those.
+
+    `make env` copies the example once and the file is the developer's afterwards, so without
+    this a stale checkout fails on a compose interpolation error instead of starting. A local
+    override must survive: the point of the file is that it can differ from the example.
+    """
+    example = tmp_path / ".env.example"
+    env = tmp_path / ".env"
+    example.write_text("# a comment\n\nKEEP=from-the-example\nNEW=sort-me-out\n")
+    env.write_text("KEEP=local-override\n")
+
+    first = sync_env(example, env)
+    assert first.returncode == 0, first.stderr
+    # The report names what it added; it never echoes a value, whatever the pair of files.
+    assert "NEW" in first.stdout
+    assert "sort-me-out" not in first.stdout, first.stdout
+    values = env_values(env)
+    assert values == {"KEEP": "local-override", "NEW": "sort-me-out"}
+
+    after_first = env.read_bytes()
+    second = sync_env(example, env)
+    assert second.returncode == 0
+    assert "defines every variable" in second.stdout
+    assert env.read_bytes() == after_first, "a second run rewrote the file"
+
+    # `--check` reports drift for a review or a CI job and never touches the file.
+    (tmp_path / "stale").write_text("KEEP=local-override\n")
+    checked = sync_env(example, tmp_path / "stale", "--check")
+    assert checked.returncode == 1
+    assert "NEW" in checked.stdout
+    assert (tmp_path / "stale").read_text() == "KEEP=local-override\n"
+
+
+def test_env_top_up_leaves_a_missing_file_to_the_makefile(tmp_path: Path):
+    """Copying the example is `make env`'s first step; this only reports and exits 0."""
+    result = sync_env(tmp_path / ".env.example", tmp_path / ".env")
+
+    assert result.returncode == 0
+    assert "does not exist" in result.stdout
+    assert not (tmp_path / ".env").exists()
+
+
 # --- Task 00.10: balancer, compose stack, PgBouncer, stubs ------------------------------
 
 # The five pools of docs/09 1.4: one per deployable family, no more.
@@ -291,13 +352,39 @@ def test_compose_services_and_security():
     )
 
 
-def test_stub_placeholders_reference_slices():
-    stack = services()
+def test_the_provider_stub_is_the_built_double_not_a_placeholder():
+    """Slice T1 replaced the busybox placeholder with the double the hub collects from."""
+    service = services()["provider-stub"]
 
-    for name, slice_name in (("provider-stub", "slice-T1"), ("meter-sim", "slice-T2")):
-        service = stack[name]
-        assert service.get("profiles") == ["stubs"], name
-        assert slice_name in " ".join(str(part) for part in service["command"]), name
+    assert service.get("profiles") == ["stubs"]
+    assert service.get("image", "").startswith("soleil/provider-stub")
+    assert service["build"]["dockerfile"] == "tools/provider_stub/Dockerfile"
+    # Every secret the double refuses to start without comes from the environment, never from the
+    # image: `config.load()` has no defaults (which is what makes a hub signature test mean it).
+    env = environment_of(service)
+    for name in (
+        "STUB_SECRET_MPESA_CD",
+        "STUB_SECRET_AIRTEL_CD",
+        "STUB_SECRET_ORANGE_CD",
+        "STUB_SECRET_SYNTHETIC",
+        "STUB_CONTROL_TOKEN",
+    ):
+        assert name in env, name
+    assert env["STUB_HUB_BASE_URL"] == "http://lb:8080"
+    # The journal is on a volume, because a restart has to replay it.
+    assert any("providerstubdata" in str(mount) for mount in service.get("volumes") or [])
+
+
+def test_stub_placeholder_references_its_slice():
+    """The meter simulator is still slice T2's work: the name and the target URL exist."""
+    service = stack_service("meter-sim")
+
+    assert service.get("profiles") == ["stubs"]
+    assert "slice-T2" in " ".join(str(part) for part in service["command"])
+
+
+def stack_service(name: str) -> dict[str, object]:
+    return services()[name]
 
 
 def test_pgbouncer_ini():

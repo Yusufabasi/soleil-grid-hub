@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://soleilgrid.example/schemas/provider_stub/statement_row.schema.json",
+  "title": "StatementRow",
+  "description": "One row of the CSV served by GET /providers/{provider}/statements, as a document: the column order of the file is `propertyOrder` below. The hub reads the file, not this schema; it exists so a row's shape is stated once, and so an injected mismatch can be described as a deviation from a row that validates.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "provider_reference",
+    "external_reference",
+    "occurred_at",
+    "amount_minor",
+    "currency",
+    "fee_minor",
+    "status",
+    "payer_msisdn_last4"
+  ],
+  "propertyOrder": [
+    "provider_reference",
+    "external_reference",
+    "occurred_at",
+    "amount_minor",
+    "currency",
+    "fee_minor",
+    "status",
+    "payer_msisdn_last4"
+  ],
+  "properties": {
+    "provider_reference": {
+      "type": "string",
+      "minLength": 1
+    },
+    "external_reference": {
+      "type": "string",
+      "description": "The top-up uuid the collection named. A formula-injection test row puts a =HYPERLINK( formula here."
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "amount_minor": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "currency": {
+      "type": "string",
+      "enum": ["USD", "CDF"]
+    },
+    "fee_minor": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Always 0 in v1: the contract's envelopes carry no fee line (slice 04 open item)."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["successful"],
+      "description": "A same-day statement lists what settled; a failed or reversed collection is a reconciliation difference, not a line."
+    },
+    "payer_msisdn_last4": {
+      "type": "string",
+      "pattern": "^[0-9]{4}$",
+      "description": "Last four digits only: a statement is a file that gets mailed around."
+    }
+  }
+}

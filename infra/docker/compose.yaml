@@ -75,13 +75,19 @@ x-app: &app
     HUB_PROBLEM_BASE_URL: ${HUB_PROBLEM_BASE_URL:-https://hub.soleilgrid.example/problems/}
     OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
     OTEL_RESOURCE_ATTRIBUTES: deployment.environment=local
-    # Payments: no HUB_PROVIDER_BASE_URLS and no HUB_PROVIDER_WEBHOOK_SECRETS here, on purpose.
-    # A provider with no base URL uses the in-memory stub adapter (the same HMAC verification,
-    # collections kept in process memory), and the settings' development default secret is what
-    # the `synthetic` channel verifies with, so `make up` collects and delivers without a
-    # provider to talk to. A deployed environment supplies both variables from its secret store;
-    # `provider-stub` below is the slice-T1 placeholder that will replace the in-memory adapter
-    # for a multi-worker local run.
+    # Payments: the local stack collects from the `provider-stub` service (slice T1) instead of
+    # from an in-memory double, so a delivery crosses four worker processes, the balancer and the
+    # real signature check. Both variables are JSON objects, assembled here from the *same*
+    # `STUB_SECRET_*` values the double reads: one source of truth, and no secret literal in this
+    # repository. A deployed environment sets both from its secret store and drops the stub.
+    HUB_PROVIDER_BASE_URLS: >-
+      {"mpesa_cd": "http://provider-stub:9100", "airtel_cd": "http://provider-stub:9100",
+       "orange_cd": "http://provider-stub:9100", "synthetic": "http://provider-stub:9100"}
+    HUB_PROVIDER_WEBHOOK_SECRETS: >-
+      {"mpesa_cd": ["${STUB_SECRET_MPESA_CD:?set STUB_SECRET_MPESA_CD in .env (make env)}"],
+       "airtel_cd": ["${STUB_SECRET_AIRTEL_CD:?set STUB_SECRET_AIRTEL_CD in .env (make env)}"],
+       "orange_cd": ["${STUB_SECRET_ORANGE_CD:?set STUB_SECRET_ORANGE_CD in .env (make env)}"],
+       "synthetic": ["${STUB_SECRET_SYNTHETIC:?set STUB_SECRET_SYNTHETIC in .env (make env)}"]}
   depends_on:
     db-logins:
       condition: service_completed_successfully
@@ -414,12 +420,50 @@ services:
       - "4318:4318"
 
   # --- stubs, on the `stubs` profile so a plain `make up` stays quiet -----------------------
-  # Both are placeholders on purpose: they exist so the compose file already has the service
-  # names, the network aliases and the target URLs the real tools will use.
+  # `provider-stub` is real from slice T1: it is the mobile-money provider the hub's adapter
+  # calls, and the things it delivers are the signed webhooks slice 04 verifies. `meter-sim` is
+  # still a placeholder until slice T2.
   provider-stub:
-    image: busybox:1.36
+    image: soleil/provider-stub:${TAG:-dev}
+    build:
+      context: ../..
+      dockerfile: tools/provider_stub/Dockerfile
     profiles: ["stubs"]
-    command: ["sh", "-c", "echo 'placeholder: see slice-T1 (provider stub)'; sleep infinity"]
+    environment:
+      # One secret per registered channel, plus the control token: `config.load()` has no
+      # defaults and refuses to start without them (that is what makes a hub signature test
+      # mean something). The values are the development ones `make env` writes; a deployed
+      # environment passes its own through its secret store.
+      STUB_SECRET_MPESA_CD: ${STUB_SECRET_MPESA_CD:?set STUB_SECRET_MPESA_CD in .env (make env)}
+      STUB_SECRET_AIRTEL_CD: ${STUB_SECRET_AIRTEL_CD:?set STUB_SECRET_AIRTEL_CD in .env (make env)}
+      STUB_SECRET_ORANGE_CD: ${STUB_SECRET_ORANGE_CD:?set STUB_SECRET_ORANGE_CD in .env (make env)}
+      STUB_SECRET_SYNTHETIC: ${STUB_SECRET_SYNTHETIC:?set STUB_SECRET_SYNTHETIC in .env (make env)}
+      STUB_CONTROL_TOKEN: ${STUB_CONTROL_TOKEN:?set STUB_CONTROL_TOKEN in .env (make env)}
+      # The balancer, not a pool container: the double posts to the same route a real provider
+      # would, which is the only way the signature, the routing and the ingest grants all get
+      # exercised together.
+      STUB_HUB_BASE_URL: http://lb:8080
+      STUB_JOURNAL_PATH: /var/lib/provider_stub/journal.jsonl
+      STUB_SIMULATE_LATENCY: "1"
+      STUB_SEED: "20261027"
+    volumes:
+      - providerstubdata:/var/lib/provider_stub
+    ports:
+      - "9100:9100"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:9100/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    # The double writes a journal and pip's cache is off, so its root stays read-only apart from
+    # the volume — the same posture the hub-* containers have.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
 
   meter-sim:
     image: busybox:1.36
@@ -431,3 +475,6 @@ volumes:
   redisdata:
   miniodata:
   haproxy-run:
+  # The double's journal: a restart replays it, so a status pull still matches the webhook it
+  # already sent (slice T1 review focus 4).
+  providerstubdata:

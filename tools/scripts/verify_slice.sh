@@ -110,11 +110,28 @@ case "${SLICE}" in
       "cd backend && python -m pytest tests/contract/test_auth_matrix.py -q"
       "python -m pytest tests -q"
       "python tools/check_traceability.py"
-      # The stub end-to-end run needs the compose stack *and* slice T1's provider stub, which is
-      # still a placeholder (`provider-stub` runs busybox under the `stubs` profile). The guard
-      # names both gaps instead of passing silently (docs/plan/progress.md).
-      'if [ ! -f backend/tests/e2e/test_topup_with_stub.py ]; then echo "tests/e2e/test_topup_with_stub.py needs slice T1 (provider stub) and its own task: see docs/plan/progress.md"; elif ! docker compose version >/dev/null 2>&1; then echo "docker is not available: the provider-stub end-to-end run is not exercised here (see docs/plan/progress.md)"; else make up && cd backend && python -m pytest tests/e2e/test_topup_with_stub.py -q; fi'
+      # Slice T1's `provider-stub` service exists and is healthy (`make verify SLICE=T1` starts
+      # it), but the end-to-end case is 04.11's own work and is not written yet. The guard names
+      # both gaps instead of passing silently (docs/plan/progress.md).
+      'if [ ! -f backend/tests/e2e/test_topup_with_stub.py ]; then echo "tests/e2e/test_topup_with_stub.py is not written yet (task 04.11): see docs/plan/progress.md"; elif ! docker compose version >/dev/null 2>&1; then echo "docker is not available: the provider-stub end-to-end run is not exercised here (see docs/plan/progress.md)"; else make up && cd backend && python -m pytest tests/e2e/test_topup_with_stub.py -q; fi'
       "cd backend && python ../tools/check_django_config.py"
+    )
+    ;;
+  T1)
+    commands=(
+      # The stub's secrets are what the hub verifies against, so a stale `.env` cannot start the
+      # stack at all: `make env` tops it up before anything asks for the values.
+      "make env"
+      "make test-tools-t1"
+      "python tools/scripts/sync_stub_schemas.py --check"
+      "python -m pytest tests/test_infra_skeleton.py -q"
+      # The double has to come up on a real socket with every secret it insists on: that is the
+      # difference between a package and a service (compose passes these same variables). The
+      # health answer is the service's own view: which channels it collected from.
+      'if docker compose version >/dev/null 2>&1; then docker compose --env-file .env -f infra/docker/compose.yaml --profile stubs up -d --build provider-stub --wait && curl -fsS localhost:9100/health && docker compose --env-file .env -f infra/docker/compose.yaml stop provider-stub; else echo "docker is not available: the provider-stub service is not started here (see docs/plan/progress.md)"; fi'
+      # 100,000 rows, the hub's upload cap: the statement has to fit in 10 MiB.
+      'cd tools/provider_stub && .venv/bin/python -m provider_stub statement --provider mpesa_cd --rows 100000 --day 2026-10-27 --out /tmp/provider_stub_statement.csv && test $(( $(wc -c < /tmp/provider_stub_statement.csv) )) -lt 10485760'
+      "python tools/check_traceability.py"
     )
     ;;
   *)

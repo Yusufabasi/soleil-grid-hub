@@ -4,8 +4,11 @@ Executor: implementing agent. Guide: `docs/plan/00-executor-guide.md`. Slices co
 (`docs/plan/slice-00-walking-skeleton.md`), **01** (`docs/plan/slice-01-identity-rbac-approvals.md`),
 **02** (`docs/plan/slice-02-registry.md`), **03** (`docs/plan/slice-03-ledger-core.md`) and **04**
 (`docs/plan/slice-04-topup-webhook.md`, Tasks 04.6–04.11 finish it; the end-to-end half of 04.11
-waits on slice T1). Update this file after every task (status, commit, test command and its summary
-line) and paste the full `make verify SLICE=00` output at the end of the slice.
+needs `tests/e2e/test_topup_with_stub.py`, which is not written yet) and **T1**
+(`docs/plan/slice-T1-provider-stub.md`, the mobile-money double the local stack collects from and
+the prerequisite of slice 04's e2e run and slice 14's reconciliation tests). Update this file
+after every task (status, commit, test command and its summary line) and paste the full
+`make verify SLICE=00` output at the end of the slice.
 
 ## Working mode from slice 02 (owner's decision, 2026-10-26)
 
@@ -88,8 +91,98 @@ the per-worker signing key and the missing `api/` in the image, which single-pro
 | 03.7 | Read API, statements and views | done | this commit | `cd backend && python -m pytest tests/integration/ledger/test_statements_api.py tests/integration/ledger/test_state_machine.py tests/unit/ledger/test_posting_properties.py -q` -> `13 passed` (the wallet endpoint's balance equals minus the sum of its entries and carries `pending_top_ups`; a customer reading another wallet gets 404; accounts list with a type filter and a keyset cursor; a transaction shows `direction` plus positive amounts; a statement page stays stable while rows are inserted; a support agent is 403 on `listLedgerAccounts`; no write route exists under `/ledger` beyond `POST /ledger/adjustments`; the hypothesis state machine runs top-up, debit, refund, reverse, fee, reconciliation fix, replay and a concurrent pair over 200 examples with the global sum per currency zero, every wallet equal to its fold, row hashes unchanged and at most one posting per `topup:<id>:confirm`; properties P1–P7 hold) |
 | 03.8 | Snapshots and the nightly drift job | done | this commit | `cd backend && python -m pytest tests/integration/ledger/test_snapshots_drift.py -q` -> `6 passed` (a snapshot for day D then a posting then a run for D+1 gives the prior balance plus the delta, and rerunning D inserts zero rows; a system account's materialised balance equals its entry sum; a wallet tampered by one minor unit is reported by `wallet_drift_job` with the metric incremented and a `ledger.drift_detected` row staged, while a clean database returns none; the imbalance check finds no transaction whose lines do not sum to zero and no second `topup_received` for one `source_top_up_id`) |
 
+## Task log — slice T1
+
+The provider double (`tools/provider_stub/`, its own package, its own venv, `httpx` its only
+runtime dependency and no import of the hub: `test_the_double_does_not_import_the_hub` checks that
+at the level of the source *and* of the dependency list). It exists so that the hub's webhook path
+can be driven end to end by something that signs the way a real provider signs — the same bytes,
+the same header names, the same `timestamp.event_id.body` string — and can then misbehave on
+demand. The five review-focus properties of the slice are pinned by name: exact sent bytes,
+duplicate/reordered deliveries, the five statement injections against `reconciliation_items.kind`,
+restart consistency, and per-provider secrets.
+
+| Task | Scope | Status | Test command and result |
+|---|---|---|---|
+| T1.1 | Package, config, state journal, provider API and `/health` | done (this commit) | `cd tools/provider_stub && .venv/bin/python -m pytest tests/test_server.py -q` -> `11 passed` (a second POST with one `reference` returns the same `provider_reference`; a different amount is 409; `pending` then `successful` after a control `complete` with `STUB_AUTO_CONFIRM_SECONDS=0`; a restart on the same journal answers `successful` and still lists the delivery the first process sent; a missing secret, a missing control token and a missing probe top-up id each refuse to start with a `ConfigError` naming the variable and never a value; the control API without its bearer token is 401; an unknown channel is 404 before anything else; `/health` names the four registered channels; the provider API waits a drawn latency only when `STUB_SIMULATE_LATENCY=1`, twenty draws sit around the configured p50 and differ from each other, and `/health` and the control API never wait) |
+| T1.2 | Signing and single signed delivery | done (this commit) | `cd tools/provider_stub && .venv/bin/python -m pytest tests/test_signing.py -q` -> `8 passed` (a hand-computed HMAC over `1700000000.evt_1.{"a":1}`; the signature recomputed over the *recorded* bytes of a delivery; `X-Webhook-Id` equals `event_id`, the timestamp is the send instant and the signature matches `^v1=[0-9a-f]{64}$`; the envelope validates against `schemas/webhook_envelope.schema.json`, a failed one carries its `failure_code`, and the serialiser is the signer's only input) |
+| T1.3 | Scenario engine, the scheduler and the delivery faults | done (this commit) | `cd tools/provider_stub && .venv/bin/python -m pytest tests/test_deliver.py -q` -> `17 passed` (`duplicate{count:3, spread_ms:1100}` is four deliveries with one `event_id`, four distinct timestamps and four valid signatures, each at its own due instant; `reorder` holds the failure until the paired confirmation has been *sent* and then delivers both in that order; the same collection completed `reverse_after` sends `payment.reversed` later with its own `event_id` and the status flipping with the envelope, not with the plan; `delayed`, `bad_signature`, `wrong_secret`, `stale_signature`, mutated-but-validly-signed bodies, `drop`, `slow_initiate`, `error_initiate`, matching by payer, an unknown mode and a count above 20 all behave as documented) |
+| T1.4 | Daily and monthly statements with injected mismatches | done (this commit) | `cd tools/provider_stub && .venv/bin/python -m pytest tests/test_statements.py -q` -> `11 passed` (the header the hub's upload parser expects; one row per successful collection that day, and a reversed one is off the statement because the money moved back; the month equals the concatenated days; each of the five kinds appears exactly once in `expected_items.json` and the other four are absent; a duplicate line repeats one `provider_reference`; a currency mismatch changes only the currency; `=HYPERLINK(...` is present for the hub's reader to neutralise; 100,000 rows stay under the 10 MiB cap; the same seed gives the same SHA-256) |
+| T1.5 | Synthetic provider, probe, schemas, contract tests, compose and Makefile | done (this commit) | `cd tools/provider_stub && .venv/bin/python -m pytest tests/test_probe.py tests/test_contract.py -q` -> `9 passed` (three intervals produce three deliveries with distinct ids and valid `synthetic` signatures; a hub answering 503 is recorded as `status=503` and the loop keeps going; the log line the alert parses carries the status and the latency and no secret; an event signed with another channel's secret verifies under that channel's and not under `synthetic`; every document the double produces validates against `schemas/`; the committed `WebhookEnvelope` copy still equals `api/openapi.yaml`) |
+
+`make verify SLICE=T1` -> `Slice T1 verification PASSED (7 commands)`, in one pass, including the
+`provider-stub` service built and started on a real socket (`/health` -> `{"providers":
+["mpesa_cd","airtel_cd","orange_cd","synthetic"],"status":"ok"}`) and the 100,000-row statement
+at 10,000,108 bytes against the 10,485,760 cap. The whole double: `56 passed`.
+
+Defects and gaps this run found, all fixed in the owning file:
+
+1. **`reverse_after` moved the status when the reversal was *planned*, not when it was sent.**
+   The store flipped to `reversed` at `complete()` time, so a status pull between the confirmation
+   and the reversal contradicted the webhook the hub had already processed — precisely the
+   inconsistency review focus 4 is about, and worse than a lost row because a pull that says
+   `reversed` sends the hub looking for money that is still there. The reversal is now its own
+   planned delivery with `is_reversal = True`; the status flips in `_send`, with the envelope.
+2. **`reorder` needed one `run_due` call per dependency level.** A pair whose second member
+   becomes due *because* the first was sent in the same pass was left on the heap until the next
+   sweep, so a caller that drove the clock to the scheduled instants saw one delivery where two
+   were expected. `_take_due` now repeats its sweep until it makes no progress, which keeps the
+   ordering guarantee and stops the caller from being the scheduler.
+3. **A test drove the clock by adding intervals up.** Three duplicates at `spread_ms=1100`
+   accumulate `0.1 + 0.1 < 0.2` in binary floating point, so the fourth was never due and the
+   test would have failed for a reason that had nothing to do with the double. `Deliverer.next_due`
+   is now public and the test moves the clock to the instant it names.
+4. **`GET` on a POST-only route was 404.** `405 if method != "GET" and method != "POST" else 404`
+   answered "that path is not here" for a wrong verb on a route that exists, which sends the caller
+   looking for a configuration mistake; `PUT`/`PATCH` were answered by the stdlib's own HTML 501
+too, breaking the rule that every answer is a document. The router now answers 405 for a known
+   path under the wrong method and the handler declares `do_PUT`/`do_PATCH`.
+5. **PyYAML was missing from the double's own development group.** The contract test runs
+   `tools/scripts/sync_stub_schemas.py`, which parses `api/openapi.yaml`; on the stub's venv that
+   was a `ModuleNotFoundError` rather than a drift check. Added to the `dev` group and the lock.
+6. **Nineteen of the twenty-one scenario modes were reachable and `STUB_SIMULATE_LATENCY` was
+   read by nothing.** `latency_p50_ms`, `latency_p99_ms` and `simulate_latency` were parsed into
+   `Config` and never used, so the local stack — whose compose service sets
+   `STUB_SIMULATE_LATENCY: "1"` — would have answered instantly and the hub's own latency budget
+   and timeout would have been rehearsed against a provider that does not exist. That is the same
+   defect as the dead `HUB_PAYMENTS_PROVIDER` of slice 04, so it is fixed the same way: the router
+   now draws the delay from the log-normal the two percentiles define (`sigma = ln(p99/p50)/2.326`)
+   from the seeded source, waits it on the provider API only, and never on `/health` or the control
+   API — a healthcheck must not queue behind a simulation, and compose's healthcheck is `/health`.
+   The sleeper is injectable like the clock, so the test proves the wait without living through it.
+7. **The `env` target could not start the stack on a checkout older than a slice.** `make env`
+   copied the example only when `.env` was absent, so the five `STUB_SECRET_*`/`STUB_CONTROL_TOKEN`
+   variables it added were missing here and compose failed with an interpolation error naming a
+   variable nobody had seen.
+   `make env` now tops the file up through `tools/scripts/sync_env.py`: absent keys are appended
+   with the example's development values, existing ones are never rewritten, a second run adds
+   nothing, and `--check` reports drift without touching the file. Two root tests pin that.
+
+Limitations, stated plainly. `tools/scripts/verify_slice.sh` runs the stub's step 3 with
+`--profile stubs` and `--env-file .env` (the service is behind a profile, and the secrets come from
+the file) and it runs `make env` first, so the slice's list is implemented rather than transcribed.
+Its step 5 (`tools/verify_forbidden_patterns.py`) is skipped by name because track T4 has not
+written that tool, and the demo script was not run as a demo: its five steps are what the suites
+assert (a duplicate scenario is task T1.3's test, the statement line is T1.4's, three probe lines
+are T1.5's) and the compose service was exercised by `make verify SLICE=T1`.
+
 ## Assumptions
 
+- **T1 `.env.example` carries development values, not only names**: the slice's Files list says
+  "variable names only, no values", but compose builds `HUB_PROVIDER_WEBHOOK_SECRETS` *and* the
+  double's environment from these values, so a name with no value cannot start the stack and the
+  alternative is a secret literal in `compose.yaml`. It is the file's own convention (the database
+  passwords are there too), the values are `dev-…`, and the rule that matters is untouched: the
+  double itself has no default for any secret and refuses to start without one —
+  `test_missing_secret_refuses_to_start` and `test_env_example_has_no_real_secrets` both hold.
+- **T1 `Store.replay_journal` is `Store._replay`**: the slice names it in the store's interface,
+  but the store replays in its own constructor, so the journal cannot be forgotten by a caller
+  that only wants a store. `test_status_matches_last_webhook_after_restart` pins the behaviour
+  (a new `Store` on an old journal), not the name.
+- **T1 `STUB_SECRET_SYNTHETIC` is the settings' development default**: `dev-synthetic-webhook-secret`
+  is what `hub/settings/base.py` uses when `HUB_PROVIDER_WEBHOOK_SECRETS` is unset, so the hub's own
+  tests and the double agree without a shim; a deployed environment keeps its real secrets in its
+  secret store, and compose passes the local ones to both sides from one place.
 - **01.1 `Principal` carries one instant, two names**: the slice asks for the docs/03 2.2
   fields *plus* `acr` and `auth_time`. `auth_time` is the field (it is the JWT claim) and
   `stepped_up_at` is a property over it, so a step-up and a login cannot disagree about when
@@ -1112,11 +1205,46 @@ Defects found while finishing the slice, all fixed in the owning file:
    deployed environment's secret store, never from this repository.
 
 Limitations, stated plainly. `tests/e2e/test_topup_with_stub.py` and the schemathesis harness are
-not written: the first needs slice T1's `provider-stub` service (still a busybox placeholder behind
-the `stubs` profile) *and* the compose stack, and the second is track T4. `verify_slice.sh` guards
-both by name. Consequently the four-worker `be_webhooks` race test and the 300 ms ack smoke are not
+not written: the first needs the compose stack and slice T1's `provider-stub` service (now built and
+healthy — see the slice T1 log below), and the second is track T4. `verify_slice.sh` guards both by
+name. Consequently the four-worker `be_webhooks` race test and the 300 ms ack smoke are not
 exercised here, and nor is `psql -f db/invariant_tests.sql` (no `psql`/DSN in this runner; the
 script says so). The integration suites ran against the offline harness (a `pgserver` PostgreSQL
-and a locally built Redis behind a `testcontainers` shim in `/tmp`), because this runner has no
-Docker socket; that harness is not part of the repository and does not exist on a machine that can
-run `make up`.
+and a locally built Redis behind a `testcontainers` shim in `/tmp`); that harness is not part of the
+repository and does not exist on a machine that can run `make up`. An earlier note in this file
+said this runner has no Docker socket; that is wrong — `make verify SLICE=T1` built and started the
+`provider-stub` container here (`docker compose … up -d --build provider-stub --wait` -> `Healthy`).
+The integration suites were run through the harness regardless, which is why `test_stack_up.py`
+and the Docker-only schema cases are the unproven ones here.
+
+### Slice T1 verification, 2026-10-27
+
+`tools/scripts/verify_slice.sh T1` ran seven commands in order and printed
+`Slice T1 verification PASSED (7 commands).` with exit 0. Transcript below; the image build of
+`provider-stub` (twelve layers, `pip install httpx`) is elided and its result kept.
+
+```
+$ make verify SLICE=T1
+==> make env
+sync_env: .env defines every variable in .env.example
+==> make test-tools-t1
+cd tools/provider_stub && .venv/bin/python -m pytest -q
+56 passed in 7.82s
+==> python tools/scripts/sync_stub_schemas.py --check
+tools/provider_stub/schemas/webhook_envelope.schema.json matches api/openapi.yaml
+==> python -m pytest tests/test_infra_skeleton.py -q
+11 passed in 1.87s
+==> docker compose --env-file .env -f infra/docker/compose.yaml --profile stubs up -d --build provider-stub --wait && curl -fsS localhost:9100/health
+    ... provider-stub Built (cached on the second run); Container soleil-provider-stub-1  Healthy
+{"providers":["mpesa_cd","airtel_cd","orange_cd","synthetic"],"status":"ok"}
+    ... Container soleil-provider-stub-1  Stopped
+==> cd tools/provider_stub && .venv/bin/python -m provider_stub statement --provider mpesa_cd --rows 100000 --day 2026-10-27 --out /tmp/provider_stub_statement.csv && test $(( $(wc -c < /tmp/provider_stub_statement.csv) )) -lt 10485760
+{"level":"INFO","line":"wrote 10000108 bytes for mpesa_cd (100000 rows, 0 injection(s)) to /tmp/provider_stub_statement.csv",…}
+==> python tools/check_traceability.py
+0 error(s), 0 warning(s)
+Slice T1 verification PASSED (7 commands).
+```
+
+Per-file counts inside `56 passed`: `test_server.py` 11, `test_signing.py` 8, `test_deliver.py` 17,
+`test_statements.py` 11, `test_probe.py` 4, `test_contract.py` 5. The whole double is also clean
+under `python -m pytest -q` from its own venv, which is the command the Makefile target runs.
