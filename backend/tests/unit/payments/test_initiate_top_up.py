@@ -266,7 +266,8 @@ def harness(
         meters=meters,
         top_ups=top_ups,
         wallet=wallet,
-        provider=provider,
+        # The service resolves an adapter by the provider's name; this build has one.
+        provider=lambda name: provider,
         unit_of_work=unit_of_work,  # type: ignore[arg-type]
         expiry_minutes=15,
         max_per_meter_24h=10,

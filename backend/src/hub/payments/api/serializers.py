@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+from collections.abc import Mapping
 from typing import Any
 from uuid import UUID
 
@@ -24,6 +25,7 @@ __all__ = [
     "decode_cursor",
     "encode_cursor",
     "page_meta",
+    "webhook_event_document",
 ]
 
 # The providers the contract exposes. `synthetic` is deliberately absent from `TopUpCreate`:
@@ -80,3 +82,35 @@ def page_meta(limit: int, *, has_next: bool, last: UUID | None) -> dict[str, Any
         "next_cursor": encode_cursor(last) if has_next and last is not None else None,
         "limit": limit,
     }
+
+
+def webhook_event_document(row: Mapping[str, Any]) -> dict[str, Any]:
+    """``WebhookEventLog`` of one stored delivery, from the columns ``hub_api`` may read.
+
+    ``signature_valid`` is always true: nothing reaches ``provider_events`` without a verified
+    signature, so a rejection is a ``webhook_quarantine`` row and not a log entry (FR-03).
+    ``error_code`` is the reason stored on the event when it was ignored or failed — the same
+    field the alerting dashboards group by.
+    """
+    return {
+        "id": str(row["id"]),
+        "provider": row["provider"],
+        "event_id": row["event_id"],
+        "event_type": row["event_type"],
+        "signature_valid": True,
+        "status": row["status"],
+        "top_up_id": str(row["top_up_id"]) if row["top_up_id"] else None,
+        "error_code": row["last_error"],
+        "received_at": _iso(row["received_at"]),
+        "processed_at": _iso(row["processed_at"]) if row["processed_at"] else None,
+    }
+
+
+def _iso(value: Any) -> str:
+    """The contract's instant: RFC 3339 in UTC with a ``Z``.
+
+    ``str(...)`` rather than the datetime's own return because the source is a raw SQL cursor:
+    mypy cannot see the column's type, and an untyped passthrough is how a non-instant reaches
+    a client that is parsing it.
+    """
+    return str(value.isoformat()).replace("+00:00", "Z")

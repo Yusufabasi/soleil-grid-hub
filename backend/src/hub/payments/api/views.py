@@ -24,8 +24,14 @@ from rest_framework.views import APIView
 
 from hub.identity.contracts import Principal
 from hub.payments import wiring
-from hub.payments.api.serializers import TopUpCreateInput, decode_cursor, page_meta
+from hub.payments.api.serializers import (
+    TopUpCreateInput,
+    decode_cursor,
+    page_meta,
+    webhook_event_document,
+)
 from hub.payments.application.top_ups import CancelTopUp, GetTopUp, TopUpQuery
+from hub.payments.application.webhook_log import WebhookLogQuery
 from hub.payments.contracts import InitiateTopUp
 from hub.shared.api.idempotency import (
     IdempotentOutcome,
@@ -37,7 +43,14 @@ from hub.shared.api.idempotency import (
 from hub.shared.api.permissions import PermissionsYamlPermission, operation
 from hub.shared.errors import InvalidRequest, Unauthenticated
 
-__all__ = ["TopUpCollectionView", "TopUpDetailView"]
+__all__ = [
+    "TopUpCancelView",
+    "TopUpCollectionView",
+    "TopUpDetailView",
+    "WebhookEventCollectionView",
+    "WebhookEventDetailView",
+    "WebhookEventReplayView",
+]
 
 TOP_UP_ROUTE = "top-ups"
 
@@ -99,6 +112,19 @@ def _statuses(request: Request) -> tuple[str, ...]:
     raw = request.query_params.get("status") or ""
     chosen = tuple(part.strip() for part in raw.split(",") if part.strip())
     unknown = sorted(set(chosen) - STATUSES)
+    if unknown:
+        raise InvalidRequest(details={"unknown": unknown})
+    return chosen
+
+
+# The delivery statuses a caller may filter on (`ck_provider_events_status`).
+EVENT_STATUSES = frozenset({"received", "processed", "ignored", "failed", "dead"})
+
+
+def _event_statuses(request: Request) -> tuple[str, ...]:
+    raw = request.query_params.get("status") or ""
+    chosen = tuple(part.strip() for part in raw.split(",") if part.strip())
+    unknown = sorted(set(chosen) - EVENT_STATUSES)
     if unknown:
         raise InvalidRequest(details={"unknown": unknown})
     return chosen
@@ -207,3 +233,70 @@ class TopUpCancelView(APIView):
     def post(self, request: Request, top_up_id: Any) -> Response:
         top_up = wiring.top_ups().cancel(_principal(request), CancelTopUp(top_up_id=top_up_id))
         return Response({"data": top_up.document()})
+
+
+class WebhookEventCollectionView(APIView):
+    """`listWebhookEvents`: the staff log, newest first, without any stored payload."""
+
+    permission_classes = [PermissionsYamlPermission]
+
+    @operation("listWebhookEvents")
+    def get(self, request: Request) -> Response:
+        _principal(request)
+        params = request.query_params
+        query = WebhookLogQuery(
+            provider=params.get("provider"),
+            statuses=_event_statuses(request),
+            event_id=params.get("event_id"),
+            received_after=_instant(params.get("created_after")),
+            after_id=decode_cursor(params.get("cursor")),
+            limit=_limit(request),
+        )
+        rows, next_cursor = wiring.webhook_log().list(query)
+        return Response(
+            {
+                "data": [webhook_event_document(row) for row in rows],
+                "meta": page_meta(
+                    query.limit,
+                    has_next=next_cursor is not None,
+                    last=rows[-1]["id"] if rows else None,
+                ),
+            }
+        )
+
+
+class WebhookEventDetailView(APIView):
+    """`getWebhookEvent`: one delivery."""
+
+    permission_classes = [PermissionsYamlPermission]
+
+    @operation("getWebhookEvent")
+    def get(self, request: Request, webhook_event_id: Any) -> Response:
+        _principal(request)
+        row = wiring.webhook_log().get(webhook_event_id)
+        response = Response({"data": webhook_event_document(row)})
+        response["Cache-Control"] = "no-store"
+        return response
+
+
+class WebhookEventReplayView(APIView):
+    """`replayWebhookEvent`: enqueue the replay job and answer 202.
+
+    The key is scoped to the event as well as the caller: replaying two events with one key
+    must be two jobs, while a retry of the same replay is the same job.
+    """
+
+    permission_classes = [PermissionsYamlPermission]
+
+    @operation("replayWebhookEvent")
+    def post(self, request: Request, webhook_event_id: Any) -> Response:
+        _principal(request)
+        route = f"webhook-events/{webhook_event_id}/replay"
+        reservation = reserve(request, scope=scope_for(request, route))
+        if isinstance(reservation, IdempotentOutcome):
+            return idempotent_response(reservation)
+        row = wiring.webhook_log().request_replay(webhook_event_id)
+        outcome = complete(reservation, status=202, body={"data": webhook_event_document(row)})
+        response = idempotent_response(outcome)
+        response["Location"] = f"/api/v1/webhook-events/{webhook_event_id}"
+        return response

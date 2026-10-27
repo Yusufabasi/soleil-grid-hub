@@ -200,7 +200,7 @@ def verify_delivery(
     envelope = parse_envelope(body)
     if envelope["event_id"] != event_id:
         raise WebhookIdMismatch(details={"header": event_id, "body": envelope["event_id"]})
-    return envelope_to_event(envelope, body)
+    return envelope_to_event(envelope)
 
 
 def parse_envelope(body: bytes) -> dict[str, Any]:
@@ -224,8 +224,13 @@ def parse_envelope(body: bytes) -> dict[str, Any]:
     return document
 
 
-def envelope_to_event(envelope: Mapping[str, Any], body: bytes) -> VerifiedEvent:
-    """``WebhookEnvelope`` to :class:`VerifiedEvent`, refusing an amount or id it cannot read."""
+def envelope_to_event(envelope: Mapping[str, Any]) -> VerifiedEvent:
+    """``WebhookEnvelope`` to :class:`VerifiedEvent`, refusing an amount or id it cannot read.
+
+    Shared by the verifying adapters and by the replay job: the stored payload *is* the
+    envelope that was verified, so a replay decodes it with the same strictness instead of
+    carrying a second parser that could disagree with this one.
+    """
     data = envelope["data"]
     amount = data.get("amount")
     if not isinstance(amount, dict):

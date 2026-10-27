@@ -24,6 +24,7 @@ from hub.payments.application.top_ups import TopUpQuery
 from hub.payments.domain.errors import InsufficientScope
 from hub.shared.money import Money
 from support.payments import NOW, PAYER, World, customer_token, staff_token, top_up_count
+from support.webhooks import wired_gateway
 
 pytestmark = [pytest.mark.integration, pytest.mark.django_db]
 
@@ -55,7 +56,8 @@ def get(client: Client, token: str, path: str) -> Any:
 @pytest.mark.tc("TC-FR-02-3")
 def test_same_key_same_body_replays_and_provider_called_once(client: Client, world: World) -> None:
     token = customer_token(world.customer_id)
-    gateway = payments_wiring.gateway("synthetic")
+    # The adapter of the provider the body names: initiation resolves it per request.
+    gateway = wired_gateway(body(world)["provider"])
 
     first = post(client, token, body(world), "key-1")
     second = post(client, token, body(world), "key-1")
@@ -246,12 +248,23 @@ def _confirm(world: World, top_up_id: uuid.UUID) -> None:
             "SELECT amount_minor, currency, customer_id, meter_id FROM hub.top_ups WHERE id = %s",
             [top_up_id],
         )
-        amount_minor, currency, _customer_id, _meter_id = cursor.fetchone()
+        selected = cursor.fetchone()
+        assert selected is not None
+        amount_minor, currency, _customer_id, _meter_id = selected
+        # Typed loosely because a raw cursor's parameters mix ids, a jsonb literal and text.
+        params: list[Any] = [
+            event_id,
+            f"evt-{event_id.hex[:12]}",
+            provider_txn,
+            amount_minor,
+            currency,
+            Jsonb({}),
+        ]
         cursor.execute(
             "INSERT INTO hub.provider_events (id, provider, event_id, provider_txn_id,"
             " event_type, amount_minor, currency, payload, status)"
             " VALUES (%s, 'mpesa_cd', %s, %s, 'payment.succeeded', %s, %s, %s, 'received')",
-            [event_id, f"evt-{event_id.hex[:12]}", provider_txn, amount_minor, currency, Jsonb({})],
+            params,
         )
         cursor.execute(
             "UPDATE hub.top_ups SET provider_event_id = %s, provider_txn_id = %s WHERE id = %s",

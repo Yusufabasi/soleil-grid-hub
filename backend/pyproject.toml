@@ -128,5 +128,6 @@ testpaths = ["tests"]
 addopts = "-ra"
 markers = [
     "integration: needs Docker (testcontainers Postgres, Redis) or the compose stack",
+    "concurrency: releases many real threads against PostgreSQL at once; run it repeatedly",
     "tc(id): traceability id from docs/10-test-strategy.md section 8",
 ]

@@ -121,6 +121,42 @@ class LedgerWriter:
             already_there is not None or not self._own_transaction(reversal_id),
         )
 
+    def post_suspense(
+        self,
+        *,
+        posting_key: str,
+        provider_event_id: UUID,
+        clearing_account_id: UUID,
+        source_top_up_id: UUID | None,
+    ) -> tuple[UUID, bool]:
+        """Park a received amount in ``suspense``; returns ``(transaction_id, replayed)``.
+
+        ``hub.post_suspense_receipt`` (migration 0004) is a separate function on purpose: the
+        general posting refuses a ``topup_received`` whose event disagrees with the top-up, and
+        a delivery that *should* disagree is exactly what lands here. The amount posted is the
+        event's, because that is the only figure a mismatch can be trusted to state.
+        """
+        already_there = self._transaction_id_for(posting_key)
+        try:
+            row = call_function(
+                "post_suspense_receipt",
+                posting_key,
+                provider_event_id,
+                clearing_account_id,
+                source_top_up_id,
+                using=self._using,
+                casts=("text", "uuid", "uuid", "uuid"),
+            )
+        except DB_ERRORS as exc:
+            raise _translate(exc) from exc
+        if row is None:  # pragma: no cover - the function always returns the id
+            raise LedgerInvariant(details={"function": "post_suspense_receipt"})
+        transaction_id = _uuid(row[0])
+        return (
+            transaction_id,
+            already_there is not None or not self._own_transaction(transaction_id),
+        )
+
     def ensure_wallet(self, customer_id: UUID, currency: str) -> UUID:
         """Create the customer's wallet for ``currency`` if it is absent; idempotent."""
         try:

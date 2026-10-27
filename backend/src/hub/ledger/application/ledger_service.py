@@ -83,6 +83,44 @@ class LedgerServiceImpl:
         self._warn_low_balance(uow, req, signed, now)
         return result
 
+    def post_suspense(
+        self,
+        *,
+        posting_key: str,
+        provider_event_id: UUID,
+        clearing: AccountRef,
+        source_top_up_id: UUID | None,
+        uow: UnitOfWork,
+    ) -> PostingResult:
+        """Park a received amount the automatic path refused to allocate (D-05).
+
+        The entries are ``(debit provider_clearing, credit suspense)`` for the event's amount:
+        the money arrived and the ledger has to say where it is, even when nothing decided
+        whose it is. No wallet is touched, so the customer's balance is untouched until a human
+        resolves the exception.
+        """
+        account_id = self._reader.account_id(clearing)
+        if account_id is None:
+            raise LedgerNotFound(details={"account": clearing.code})
+        transaction_id, replayed = self._writer.post_suspense(
+            posting_key=posting_key,
+            provider_event_id=provider_event_id,
+            clearing_account_id=account_id,
+            source_top_up_id=source_top_up_id,
+        )
+        if not replayed:
+            uow.outbox.add(
+                ledger_posted(
+                    ids=self._ids,
+                    occurred_at=self._clock.now(),
+                    transaction_id=transaction_id,
+                    kind="topup_received",
+                    posting_key=posting_key,
+                    effective_at=self._clock.now(),
+                )
+            )
+        return PostingResult(transaction_id=transaction_id, replayed=replayed)
+
     def reverse(
         self,
         original_transaction_id: UUID,

@@ -75,6 +75,13 @@ x-app: &app
     HUB_PROBLEM_BASE_URL: ${HUB_PROBLEM_BASE_URL:-https://hub.soleilgrid.example/problems/}
     OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
     OTEL_RESOURCE_ATTRIBUTES: deployment.environment=local
+    # Payments: no HUB_PROVIDER_BASE_URLS and no HUB_PROVIDER_WEBHOOK_SECRETS here, on purpose.
+    # A provider with no base URL uses the in-memory stub adapter (the same HMAC verification,
+    # collections kept in process memory), and the settings' development default secret is what
+    # the `synthetic` channel verifies with, so `make up` collects and delivers without a
+    # provider to talk to. A deployed environment supplies both variables from its secret store;
+    # `provider-stub` below is the slice-T1 placeholder that will replace the in-memory adapter
+    # for a multi-worker local run.
   depends_on:
     db-logins:
       condition: service_completed_successfully

@@ -30,6 +30,7 @@ from uuid import UUID
 
 from django.db import connections, transaction
 from psycopg.types.json import Jsonb
+from rest_framework.exceptions import UnsupportedMediaType
 from rest_framework.request import Request
 from rest_framework.response import Response
 
@@ -102,6 +103,20 @@ def _request_hash(body: Any) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
+def _body_to_hash(request: Request) -> Any:
+    """The body a key is scoped to, or an empty one when there is no parsable body.
+
+    An operation whose body is empty — `replayWebhookEvent` sends nothing — still needs an
+    idempotency key. DRF refuses to parse a body it has no parser for (a client that posts with
+    no content type at all), and that refusal must not turn a legitimate request into a 500: an
+    absent body and an empty object describe the same request, and both hash the same way.
+    """
+    try:
+        return request.data
+    except UnsupportedMediaType:
+        return {}
+
+
 def replay_or_run(
     request: Request,
     *,
@@ -115,7 +130,7 @@ def replay_or_run(
         status, body = run()
         return IdempotentOutcome(status=status, body=body, key=None)
 
-    request_hash = _request_hash(getattr(request, "data", {}))
+    request_hash = _request_hash(_body_to_hash(request))
     now = current()
     with transaction.atomic():
         replay = _reserve(scope, key, request_hash, now, subject_customer_id)
@@ -148,7 +163,7 @@ def reserve(
     ``locked_until`` and the key may be retried after it.
     """
     key = _require_key(request)
-    request_hash = _request_hash(getattr(request, "data", {}))
+    request_hash = _request_hash(_body_to_hash(request))
     now = current()
     with transaction.atomic():
         replay = _reserve(scope, key, request_hash, now, subject_customer_id)

@@ -11,19 +11,22 @@ into :class:`VerifiedEvent`, and nothing above this file knows what speaks to th
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal, Protocol
 from uuid import UUID
 
+from hub.shared.contracts import JobQueue
 from hub.shared.money import Money
 
 __all__ = [
     "CollectionAck",
     "CollectionRequest",
     "EligibilityChecker",
+    "JobQueue",
     "ProviderGateway",
+    "ProviderResolver",
     "ProviderTxnStatus",
     "VerifiedEvent",
 ]
@@ -106,6 +109,16 @@ class ProviderGateway(Protocol):
     def fetch_status(self, provider_txn_id: str) -> ProviderTxnStatus:
         """Pull the provider's own view of a transaction."""
         ...
+
+
+ProviderResolver = Callable[[str], ProviderGateway]
+"""The adapter for a provider *name*, resolved per call.
+
+A top-up names its provider, and a delivery arrives on that provider's route; one composed
+adapter would verify an `airtel_cd` body with `mpesa_cd`'s secret or send `orange_cd`'s
+collection through the wrong gateway. The resolver is what makes the name on the row (or in
+the URL) the thing that decides, exactly as ``PROVIDER_WEBHOOK_SECRETS`` is keyed by provider.
+"""
 
 
 class EligibilityChecker(Protocol):

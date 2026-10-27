@@ -2,9 +2,10 @@
 
 Executor: implementing agent. Guide: `docs/plan/00-executor-guide.md`. Slices complete: **00**
 (`docs/plan/slice-00-walking-skeleton.md`), **01** (`docs/plan/slice-01-identity-rbac-approvals.md`),
-**02** (`docs/plan/slice-02-registry.md`) and **03** (`docs/plan/slice-03-ledger-core.md`). Update this file after every task (status, commit,
-test command and its summary line) and paste the full `make verify SLICE=00` output at the end
-of the slice.
+**02** (`docs/plan/slice-02-registry.md`), **03** (`docs/plan/slice-03-ledger-core.md`) and **04**
+(`docs/plan/slice-04-topup-webhook.md`, Tasks 04.6–04.11 finish it; the end-to-end half of 04.11
+waits on slice T1). Update this file after every task (status, commit, test command and its summary
+line) and paste the full `make verify SLICE=00` output at the end of the slice.
 
 ## Working mode from slice 02 (owner's decision, 2026-10-26)
 
@@ -1057,11 +1058,65 @@ Recorded rather than hidden: `payer_matched` stores a real comparison (both numb
 503 and commits nothing until 04.8 routes it to `suspense`; and `payment.confirmed` carries
 `quoted_energy_wh` from the row's stored snapshot, which is the D-08 value the token saga will read.
 
-Remaining, in the slice's order: 04.6 the fifty-way concurrency suite, 04.7 the ingest migration and `hub.post_suspense_receipt`, 04.8 late/mismatch routing and
-pull verification, 04.9 reversals, 04.10 sweepers and webhook-log operations, 04.11 wiring,
-conformance and the stub end-to-end run.
+#### Tasks 04.6 – 04.11 (this commit)
 
-Two of those cannot be proved in this runner even when written: 04.11's e2e tests and 04.6's
-four-worker test need `make up` (Docker), and the schemathesis harness it names is track T4 and
-not in this tree. The slice also depends on slice T1's provider stub, which is not built yet;
-04.2 onward need at least its `fake_provider` half.
+| Task | Scope | Status | Test command and result |
+|---|---|---|---|
+| 04.6 | Fifty-way parallel delivery and the crash-point suite | done | `cd backend && python -m pytest tests/integration/payments/test_webhook_concurrency.py -q -m concurrency` -> `8 passed`, five consecutive runs; `fifty` deliveries give exactly one `accepted` and 49 `duplicate`, one event row, one transaction, one outbox row; 20 event ids for one charge credit once; confirm/failed races never downgrade; a Redis flush between deliveries still credits once; zero rows after a crash before commit and a no-op retry after a crash before the response |
+| 04.7 | Ingest account lookup and `hub.post_suspense_receipt` | done | `cd backend && python -m pytest tests/integration/payments/test_suspense_migration.py -q` -> `12 passed` (`hub_ingest` reads account ids and not balances nor writes, zero-sum clearing-to-suspense receipt, requires a stored success event, idempotent on the posting key, refuses a non-success type and a foreign-currency clearing account, `prosecdef` with the pinned `search_path`, invariants re-checked) |
+| 04.8 | Late credit, mismatch routing and pull verification | done | `cd backend && python -m pytest tests/unit/payments/test_routing.py tests/integration/payments/test_late_and_mismatch.py -q` -> `35 passed` (nine reasons in the documented priority order; `late` never routes to suspense; the pull runs at 10,000 USD minor and not at 9,999; a disagreeing pull sets `pending_unknown` and suspense; an unreachable provider is 503 with nothing stored) |
+| 04.9 | Provider reversals | done | `cd backend && python -m pytest tests/integration/payments/test_provider_reversal.py -q` -> `5 passed` (`reversed` with `shortfall_minor = 0`; after a simulated 80 % energy purchase the shortfall goes to `chargeback_receivable` with `ledger.chargeback_opened`; the reversal event has its own `-R` key; a duplicate reversal is a no-op; reversing an unconfirmed top-up is an exception and not a posting) |
+| 04.10 | Sweepers, webhook log and replay | done | `cd backend && python -m pytest tests/integration/payments/test_sweepers.py tests/integration/payments/test_sweeper_locking.py tests/integration/payments/test_webhook_events_api.py -q` -> `25 passed` (only `initiated`/`pending` expire, `pending_unknown` never; a retry after 60 s re-uses the same reference; a poll that finds success raises one `statement_only` exception and never credits; `SKIP LOCKED` skips a locked row; the log never returns a payload and replay enqueues one deduplicated job that credits an ignored event once the top-up exists) |
+| 04.11 | Wiring, conformance and end to end | partial | wiring, routes, jobs and the log are in place and covered by the suites above; `tests/contract/test_openapi_conformance.py` (schemathesis, track T4) and `tests/e2e/test_topup_with_stub.py` (needs slice T1's provider stub and `make up`) are not in this tree — the verify script names both gaps instead of passing silently |
+
+The whole slice, verified in one pass:
+
+| Command | Result |
+|---|---|
+| `pytest tests/unit/payments tests/integration/payments -q -m 'not concurrency'` | `151 passed, 8 deselected` |
+| `pytest tests/integration/payments/test_webhook_concurrency.py -q -m concurrency` (5 consecutive runs) | `8 passed` each |
+| `pytest tests -q` (whole backend) | `737 passed` |
+| `pytest tests/contract/test_auth_matrix.py -q` | `75 passed` |
+| `pytest ../tests -q` (root contracts) | `42 passed, 5 deselected` |
+| `python -m pytest tests/test_alignment.py tests/test_schema_in_postgres.py tests/test_traceability.py -q` | `34 passed` |
+| `python tools/check_traceability.py` | `0 error(s), 0 warning(s)` |
+| `ruff check .`, `ruff format --check .` | clean (350 files) |
+| `mypy` (strict) | clean (348 files) |
+| `lint-imports --config .importlinter` | `119 kept, 0 broken` |
+| `python tools/check_django_config.py` | `Django configuration checks passed` |
+| `make verify SLICE=04` | `Slice 04 verification PASSED (10 commands)` |
+
+Defects found while finishing the slice, all fixed in the owning file:
+
+1. **Two test modules with one basename.** The slice names `integration/payments/test_reversal.py`,
+   which the ledger suite already uses; this tree's test directories carry no `__init__.py`, so
+   pytest's default import mode refused the second one and the *whole* backend suite failed to
+   collect. The payments module is now `test_provider_reversal.py`, and the reason is in its
+   docstring.
+2. **The concurrency marker was never applied.** `verify_slice.sh` selects the race suite with
+   `-m concurrency` and the module only carried `integration`, so the five consecutive runs would
+   have collected nothing (exit 5). The marker is on the module and registered in
+   `pyproject.toml`.
+3. **The failed-branch assertion contradicted D-05.** `test_parallel_confirm_and_failed_never_downgrade`
+   asserted *no* transaction when the failure wins the race — but the money did arrive, so the
+   documented route is a suspense receipt under `top_up_failed_state`. The test now asserts the
+   property that matters: the wallet is untouched and every posting for that top-up is a suspense
+   posting.
+4. **`JobQueue` was satisfied by accident.** `OutboxJobQueue.enqueue` took `dict[str, Any]` where
+   the port promises `Mapping[str, Any]`, and it minted non-deduplicated ids with `uuid.uuid4()`,
+   which the kernel's own rule bans (`IdGenerator`). It takes an `IdGenerator` now, and
+   `payments.wiring` passes the same one the rest of the module uses.
+5. **A dead setting.** `HUB_PAYMENTS_PROVIDER` was configured but read nowhere: the provider a
+   top-up collects on is part of its own request. Removed, and both `.env.example` and the compose
+   `x-app-env` now say where the provider base URLs and webhook secrets come from instead — from a
+   deployed environment's secret store, never from this repository.
+
+Limitations, stated plainly. `tests/e2e/test_topup_with_stub.py` and the schemathesis harness are
+not written: the first needs slice T1's `provider-stub` service (still a busybox placeholder behind
+the `stubs` profile) *and* the compose stack, and the second is track T4. `verify_slice.sh` guards
+both by name. Consequently the four-worker `be_webhooks` race test and the 300 ms ack smoke are not
+exercised here, and nor is `psql -f db/invariant_tests.sql` (no `psql`/DSN in this runner; the
+script says so). The integration suites ran against the offline harness (a `pgserver` PostgreSQL
+and a locally built Redis behind a `testcontainers` shim in `/tmp`), because this runner has no
+Docker socket; that harness is not part of the repository and does not exist on a machine that can
+run `make up`.

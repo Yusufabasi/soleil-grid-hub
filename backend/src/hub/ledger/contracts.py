@@ -348,6 +348,15 @@ class LedgerWriterPort(Protocol):
 
     def post(self, request: PostingRequest, lines: Sequence[Any]) -> PostingResult: ...
 
+    def post_suspense(
+        self,
+        *,
+        posting_key: str,
+        provider_event_id: UUID,
+        clearing_account_id: UUID,
+        source_top_up_id: UUID | None,
+    ) -> tuple[UUID, bool]: ...
+
     def reverse(
         self,
         original_transaction_id: UUID,
@@ -376,6 +385,18 @@ class LedgerService(Protocol):
     """What a money-moving module may ask the ledger to do (docs/03 2.5)."""
 
     def post(self, req: PostingRequest, *, uow: UnitOfWork) -> PostingResult: ...
+
+    def post_suspense(
+        self,
+        *,
+        posting_key: str,
+        provider_event_id: UUID,
+        clearing: AccountRef,
+        source_top_up_id: UUID | None,
+        uow: UnitOfWork,
+    ) -> PostingResult:
+        """Park a received amount the automatic path refused to allocate (D-05)."""
+        ...
 
     def reverse(
         self,

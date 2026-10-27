@@ -28,7 +28,7 @@ from uuid import UUID
 from hub.customers.contracts import CustomerDirectory, PlanView
 from hub.customers.domain.masking import mask_phone
 from hub.identity.contracts import Principal
-from hub.payments.application.ports import CollectionAck, CollectionRequest, ProviderGateway
+from hub.payments.application.ports import CollectionAck, CollectionRequest, ProviderResolver
 from hub.payments.contracts import InitiateTopUp, TopUpRow, TopUpView
 from hub.payments.domain.errors import (
     AmountOutOfRange,
@@ -67,11 +67,16 @@ class MeterStatusLookup(Protocol):
     """The meter registry, seen through the payments module's own port.
 
     ``payments`` may not import ``hub.meters`` (module DAG), so the registry arrives at the
-    composition root through the kernel registry and is typed here by what this use case
-    actually uses: a status. ``meters.contracts.MeterRegistry`` satisfies it structurally.
+    composition root through the kernel registry and is typed here by what these use cases
+    actually use: a status, and the registry's own credit verdict for the credit path.
+    ``meters.contracts.MeterRegistry`` satisfies it structurally.
     """
 
     def get(self, meter_id: UUID) -> MeterFacts: ...
+
+    def assert_usable_for_credit(self, meter_id: UUID, customer_id: UUID) -> None:
+        """Raise ``MeterNotUsable`` (``meter_decommissioned`` / ``meter_not_owned``)."""
+        ...
 
 
 # The statuses the guard knows. `initiated -> pending_unknown` is not one of its edges, so a
@@ -137,7 +142,7 @@ class InitiateTopUpService:
         meters: MeterStatusLookup,
         top_ups: TopUpStore,
         wallet: WalletPort,
-        provider: ProviderGateway,
+        provider: ProviderResolver,
         unit_of_work: UnitOfWorkFactory,
         expiry_minutes: int,
         max_per_meter_24h: int,
@@ -229,7 +234,8 @@ class InitiateTopUpService:
             expires_at=row.expires_at,
         )
         try:
-            return self._provider.initiate_collection(request)
+            # The adapter of *this row's* provider: the name the collection will arrive under.
+            return self._provider(row.provider).initiate_collection(request)
         except TimeoutError:
             # The collection may exist on the provider's side; only a pull can say.
             return None

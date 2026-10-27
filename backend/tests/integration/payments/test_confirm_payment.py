@@ -11,210 +11,39 @@ algorithm the HTTP adapter uses, so a delivery here is verified exactly as a pro
 
 from __future__ import annotations
 
-import json
 import uuid
-from datetime import timedelta
 from typing import Any
 
 import pytest
 from django.db import connection
-from django.test import Client, override_settings
+from django.test import Client
 
-from hub.identity import wiring as identity_wiring
-from hub.ledger.contracts import AccountRef
-from hub.ledger.wiring import service as ledger_service
 from hub.payments import wiring as payments_wiring
 from hub.payments.domain.errors import CreditPathUnavailable
-from hub.payments.infrastructure.fake_provider import (
-    DEFAULT_FAKE_SECRET,
-    FakeProviderGateway,
+from support.payments import NOW, World
+from support.webhooks import (
+    PROVIDER,
+    deliver,
+    envelope,
+    event_rows,
+    make_top_up,
+    outbox_rows,
+    redis_hint,
+    seed_top_up,
+    top_up_row,
+    transactions_for,
+    wallet_balance,
+    webhook_pool,
 )
-from support.payments import NOW, PAYER, World, customer_token
 
 pytestmark = [pytest.mark.integration, pytest.mark.django_db]
-
-PROVIDER = "mpesa_cd"
-WEBHOOK = f"/api/v1/webhooks/providers/{PROVIDER}"
-TIMESTAMP = str(int(NOW.timestamp()))
 
 
 @pytest.fixture(autouse=True)
 def _webhook_pool() -> Any:
     """Serve the route from the webhooks URLConf, as the deployed pool does."""
-    with override_settings(ROOT_URLCONF="hub.urls.webhooks"):
-        yield
-
-
-# --- helpers --------------------------------------------------------------------------------
-
-
-def gateway() -> FakeProviderGateway:
-    return FakeProviderGateway(secrets=(DEFAULT_FAKE_SECRET,))
-
-
-def envelope(
-    event_id: str,
-    *,
-    top_up_id: uuid.UUID | None = None,
-    event_type: str = "payment.confirmed",
-    amount_minor: int = 500,
-    payer: str = PAYER,
-    failure_code: str | None = None,
-) -> dict[str, Any]:
-    data: dict[str, Any] = {
-        "provider_reference": f"MP-{event_id}",
-        "external_reference": str(top_up_id or uuid.uuid4()),
-        "amount": {"amount_minor": amount_minor, "currency": "USD"},
-        "payer_msisdn": payer,
-    }
-    if failure_code is not None:
-        data["failure_code"] = failure_code
-    return {
-        "event_id": event_id,
-        "type": event_type,
-        "occurred_at": "2026-10-27T08:59:00Z",
-        "data": data,
-    }
-
-
-def deliver(
-    client: Client,
-    document: dict[str, Any],
-    *,
-    secret: str | None = None,
-    timestamp: str = TIMESTAMP,
-) -> Any:
-    headers, body = gateway().signed(document, timestamp=timestamp, secret=secret)
-    return client.post(WEBHOOK, data=body, content_type="application/json", headers=headers)
-
-
-def make_top_up(client: Client, world: World, *, amount_minor: int = 500) -> uuid.UUID:
-    """Initiate through the API, so the row is `pending` the way a real delivery finds it."""
-    with override_settings(ROOT_URLCONF="hub.urls.api"):
-        created = client.post(
-            "/api/v1/top-ups",
-            {
-                "meter_id": str(world.meter_id),
-                "amount": {"amount_minor": amount_minor, "currency": "USD"},
-                "provider": PROVIDER,
-                "payer_msisdn": PAYER,
-            },
-            content_type="application/json",
-            headers={
-                "Authorization": f"Bearer {customer_token(world.customer_id)}",
-                "Idempotency-Key": str(uuid.uuid4()),
-            },
-        )
-    assert created.status_code == 202, created.json()
-    return uuid.UUID(created.json()["data"]["id"])
-
-
-def seed_initiated_top_up(world: World, *, amount_minor: int = 500) -> uuid.UUID:
-    """A top-up whose initiation has not been answered yet: the row a fast delivery finds."""
-    top_up_id = uuid.uuid4()
-    tariff = 25_000  # `support.payments.TARIFF_MINOR_PER_KWH`
-    # The wallet the posting needs: initiation creates it in the transaction that inserts the
-    # row, so a hand-seeded top-up has to create it too or it is a row no environment has.
-    with identity_wiring.unit_of_work(None) as uow:
-        ledger_service().ensure_wallet(world.customer_id, "USD", uow=uow)
-    with connection.cursor() as cursor:
-        cursor.execute(
-            "INSERT INTO hub.top_ups (id, customer_id, meter_id, provider, provider_ref,"
-            " payer_msisdn, amount_minor, currency, plan_tariff_id, tariff_minor_per_kwh,"
-            " energy_wh, status, expires_at)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, 'USD', %s, %s, %s, 'initiated', %s)",
-            [
-                top_up_id,
-                world.customer_id,
-                world.meter_id,
-                PROVIDER,
-                str(top_up_id),
-                PAYER,
-                amount_minor,
-                world.tariff_id,
-                tariff,
-                amount_minor * 1000 // tariff,
-                NOW + timedelta(minutes=30),
-            ],
-        )
-    return top_up_id
-
-
-def top_up_row(top_up_id: uuid.UUID) -> dict[str, Any]:
-    with connection.cursor() as cursor:
-        cursor.execute(
-            "SELECT status, late, provider_txn_id, payer_matched, provider_event_id,"
-            " ledger_transaction_id, confirmed_at FROM hub.top_ups WHERE id = %s",
-            [top_up_id],
-        )
-        row = cursor.fetchone()
-    assert row is not None
-    return {
-        "status": row[0],
-        "late": row[1],
-        "provider_txn_id": row[2],
-        "payer_matched": row[3],
-        "provider_event_id": row[4],
-        "ledger_transaction_id": row[5],
-        "confirmed_at": row[6],
-    }
-
-
-def event_rows() -> list[dict[str, Any]]:
-    with connection.cursor() as cursor:
-        cursor.execute(
-            "SELECT event_id, provider_txn_id, event_type, status, last_error"
-            " FROM hub.provider_events ORDER BY received_at"
-        )
-        return [
-            {
-                "event_id": row[0],
-                "provider_txn_id": row[1],
-                "event_type": row[2],
-                "status": row[3],
-                "last_error": row[4],
-            }
-            for row in cursor.fetchall()
-        ]
-
-
-def outbox_rows(event_type: str | None = None) -> list[dict[str, Any]]:
-    query = "SELECT event_type, aggregate_id, payload FROM hub.outbox"
-    params: list[Any] = []
-    if event_type is not None:
-        query += " WHERE event_type = %s"
-        params.append(event_type)
-    with connection.cursor() as cursor:
-        cursor.execute(query + " ORDER BY created_at", params)
-        # Django's psycopg backend loads jsonb as text, so the payload is decoded here.
-        return [
-            {"event_type": row[0], "aggregate_id": row[1], "payload": json.loads(row[2])}
-            if isinstance(row[2], str)
-            else {"event_type": row[0], "aggregate_id": row[1], "payload": row[2]}
-            for row in cursor.fetchall()
-        ]
-
-
-def wallet_balance(customer_id: uuid.UUID) -> int:
-    reference = AccountRef(kind="customer_wallet", currency="USD", customer_id=customer_id)
-    return ledger_service().balance(reference).amount_minor
-
-
-def transactions_for(top_up_id: uuid.UUID) -> list[str]:
-    with connection.cursor() as cursor:
-        cursor.execute(
-            "SELECT posting_key FROM hub.ledger_transactions WHERE source_top_up_id = %s",
-            [top_up_id],
-        )
-        return [row[0] for row in cursor.fetchall()]
-
-
-def redis_hint(event_id: str) -> str | None:
-    """The hint of a delivery, read from the same Redis the application uses."""
-    return identity_wiring.store().get(f"provider_event:{PROVIDER}:{event_id}")
-
-
-# --- the credit -----------------------------------------------------------------------------
+    with webhook_pool():
+        yield  # --- the credit -----------------------------------------------------------------------------
 
 
 def test_confirmed_credits_wallet_once(client: Client, world: World) -> None:
@@ -312,7 +141,7 @@ def test_confirm_from_initiated_passes_through_pending(
     A delivery can beat the provider's own answer to the initiation, which is exactly the row
     this test seeds: inserted as ``initiated`` and never moved to ``pending``.
     """
-    top_up_id = seed_initiated_top_up(world)
+    top_up_id = seed_top_up(world, status="initiated")
 
     written: list[dict[str, Any]] = []
     repository = payments_wiring.top_up_repository()
@@ -356,6 +185,9 @@ class _BrokenLedger:
         return uuid.uuid4()
 
     def reverse(self, *args: Any, **kwargs: Any) -> Any:  # pragma: no cover - not called
+        raise NotImplementedError
+
+    def post_suspense(self, *args: Any, **kwargs: Any) -> Any:  # pragma: no cover - not called
         raise NotImplementedError
 
 
@@ -467,32 +299,6 @@ def test_failed_after_confirmed_does_not_downgrade(client: Client, world: World)
     assert [event["status"] for event in events] == ["processed", "processed"]
     assert events[1]["last_error"] == "ignored_terminal"
     assert len(outbox_rows("payment.failed")) == 0
-
-
-def test_a_confirmation_for_a_failed_top_up_is_not_silently_accepted(
-    client: Client, world: World
-) -> None:
-    """Money for a top-up the hub already gave up on cannot be credited by this build.
-
-    `top_ups_guard` has no `failed -> confirmed` edge, and routing it to `suspense` is Task
-    04.8. Answering 503 commits nothing and lets the provider retry, which is the only honest
-    answer while the suspense path does not exist.
-    """
-    top_up_id = make_top_up(client, world)
-    deliver(
-        client,
-        envelope(
-            "evt_13", top_up_id=top_up_id, event_type="payment.failed", failure_code="declined"
-        ),
-    )
-    assert top_up_row(top_up_id)["status"] == "failed"
-
-    response = deliver(client, envelope("evt_14", top_up_id=top_up_id))
-
-    assert response.status_code == 503, response.json()
-    assert response["Retry-After"] == "30"
-    assert top_up_row(top_up_id)["status"] == "failed"
-    assert [event["event_id"] for event in event_rows()] == ["evt_13"]
 
 
 def test_a_late_confirmation_of_an_expired_top_up_is_credited(client: Client, world: World) -> None:

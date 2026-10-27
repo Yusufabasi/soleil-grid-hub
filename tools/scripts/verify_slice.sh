@@ -97,6 +97,26 @@ case "${SLICE}" in
       'if command -v psql >/dev/null 2>&1 && [ -n "${HUB_TEST_DB_URL:-}" ]; then psql "${HUB_TEST_DB_URL}" -v ON_ERROR_STOP=1 -f db/invariant_tests.sql; else echo "psql or HUB_TEST_DB_URL is not set: db/invariant_tests.sql not run here (see docs/plan/progress.md)"; fi'
     )
     ;;
+  04)
+    commands=(
+      "make lint"
+      "make contracts"
+      "cd backend && python -m pytest tests/unit/payments tests/integration/payments -q -m 'not concurrency'"
+      # Five consecutive runs, as the slice asks: the race is the part that flakes, and a
+      # single green run of a concurrency suite proves very little (nightly CI runs twenty).
+      "cd backend && for i in 1 2 3 4 5; do python -m pytest tests/integration/payments/test_webhook_concurrency.py -q -m concurrency || exit 1; done"
+      # The schemathesis harness is track T4 and not in this tree (same guard as slices 01-02).
+      "if [ -f backend/tests/contract/test_openapi_conformance.py ]; then cd backend && python -m pytest tests/contract/test_openapi_conformance.py -q -k 'top_ups or webhooks or webhook_events'; else echo 'openapi conformance harness is not in this tree (track T4): see docs/plan/progress.md'; fi"
+      "cd backend && python -m pytest tests/contract/test_auth_matrix.py -q"
+      "python -m pytest tests -q"
+      "python tools/check_traceability.py"
+      # The stub end-to-end run needs the compose stack *and* slice T1's provider stub, which is
+      # still a placeholder (`provider-stub` runs busybox under the `stubs` profile). The guard
+      # names both gaps instead of passing silently (docs/plan/progress.md).
+      'if [ ! -f backend/tests/e2e/test_topup_with_stub.py ]; then echo "tests/e2e/test_topup_with_stub.py needs slice T1 (provider stub) and its own task: see docs/plan/progress.md"; elif ! docker compose version >/dev/null 2>&1; then echo "docker is not available: the provider-stub end-to-end run is not exercised here (see docs/plan/progress.md)"; else make up && cd backend && python -m pytest tests/e2e/test_topup_with_stub.py -q; fi'
+      "cd backend && python ../tools/check_django_config.py"
+    )
+    ;;
   *)
     echo "unknown slice '${SLICE}': add its commands to tools/scripts/verify_slice.sh" >&2
     exit 2

@@ -124,10 +124,10 @@ HUB_TOPUP_EXPIRY_MINUTES = env.int("HUB_TOPUP_EXPIRY_MINUTES", default=15)
 HUB_TOPUP_MAX_PER_METER_24H = env.int("HUB_TOPUP_MAX_PER_METER_24H", default=10)
 HUB_TOPUP_MAX_PER_PAYER_1H = env.int("HUB_TOPUP_MAX_PER_PAYER_1H", default=5)
 
-# The provider whose collections this deployable initiates (`synthetic` is the stub adapter).
-HUB_PAYMENTS_PROVIDER = env.str("HUB_PAYMENTS_PROVIDER", default="synthetic")
 # `{provider: base_url}` for the HTTP adapter. A provider with no base URL uses the in-memory
-# stub, which is what local and test runs want: nothing leaves the process.
+# stub, which is what local and test runs want: nothing leaves the process. The provider a
+# top-up names is part of its own request (`TopUpCreate.provider`), never a process-wide setting,
+# because one deployable collects for every channel the site is configured for.
 HUB_PROVIDER_BASE_URLS: dict[str, str] = env.json("HUB_PROVIDER_BASE_URLS", default={})
 
 # An amount at or above this floor is confirmed by pulling the provider's status API, not by

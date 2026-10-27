@@ -16,7 +16,7 @@ time and nothing else.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -29,8 +29,12 @@ __all__ = [
     "JobHandler",
     "JobRegistry",
     "get_registry",
+    "register_cron",
+    "register_handler",
+    "registered_handlers",
     "registered_jobs",
     "reset",
+    "resolve_handler",
     "run_job",
 ]
 
@@ -39,11 +43,17 @@ JobHandler = Callable[["JobContext"], Any]
 
 @dataclass(frozen=True, slots=True)
 class JobContext:
-    """What a handler is given: its own name, the instant it started, and the id generator."""
+    """What a handler is given: its name, the instant it started, the ids and its arguments.
+
+    ``payload`` is how an *event-driven* job receives what it was asked to do ("replay event X"):
+    a cron job has none, and a handler that needs one refuses to run without it rather than
+    guessing which row was meant.
+    """
 
     name: str
     now: datetime
     ids: IdGenerator
+    payload: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +101,9 @@ class JobRegistry:
 
 
 _registry = JobRegistry()
+# Event-driven handlers, addressable by name but never run by the scheduler: an `--once` pass
+# would otherwise replay whatever the last request enqueued, on a timer.
+_handlers: dict[str, JobHandler] = {}
 
 
 def get_registry() -> JobRegistry:
@@ -113,14 +126,40 @@ def register_cron(
     _registry.register_cron(name=name, cron=cron, handler=handler, singleton=singleton)
 
 
-def run_job(name: str, *, now: datetime, ids: IdGenerator) -> Any:
-    """Run one registered job by name; an unknown name is a programming error, not a skip."""
+def register_handler(*, name: str, handler: JobHandler) -> None:
+    """Contribute an event-driven handler (``payments.replay_event`` and friends)."""
+    if not name or "." not in name:
+        raise ValueError(f"job name must be '<module>.<job>', got {name!r}")
+    _handlers[name] = handler
+
+
+def registered_handlers() -> tuple[str, ...]:
+    return tuple(sorted(_handlers))
+
+
+def resolve_handler(name: str) -> JobHandler | None:
+    """The handler for ``name``: a cron job's, an event-driven one's, or ``None``."""
     job = _registry.get(name)
-    if job is None:
+    if job is not None:
+        return job.handler
+    return _handlers.get(name)
+
+
+def run_job(
+    name: str,
+    *,
+    now: datetime,
+    ids: IdGenerator,
+    payload: Mapping[str, Any] | None = None,
+) -> Any:
+    """Run one registered job by name; an unknown name is a programming error, not a skip."""
+    handler = resolve_handler(name)
+    if handler is None:
         raise KeyError(f"no job registered as {name!r}")
-    return job.handler(JobContext(name=job.name, now=now, ids=ids))
+    return handler(JobContext(name=name, now=now, ids=ids, payload=payload))
 
 
 def reset() -> None:
     """Forget every registration. Tests only: composition is redone by ``ready``."""
     _registry.clear()
+    _handlers.clear()

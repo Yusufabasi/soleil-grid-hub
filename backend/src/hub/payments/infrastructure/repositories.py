@@ -20,6 +20,7 @@ confirmation in ``domain/routing.py``.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
@@ -232,6 +233,33 @@ class TopUpRepository:
                 [now, limit],
             )
             return [record[0] for record in cursor.fetchall()]
+
+    def claim_due(
+        self,
+        *,
+        statuses: Sequence[str],
+        due_column: str,
+        before: datetime,
+        limit: int,
+        uow: UnitOfWork,
+    ) -> list[TopUpRow]:
+        """Rows a sweeper may work on, locked so two runs cannot take the same one.
+
+        ``FOR UPDATE SKIP LOCKED`` is what makes the sweepers safe to run twice at once: the
+        second replica skips what the first holds instead of waiting for it and redoing it.
+        ``due_column`` is whitelisted because it becomes part of the statement.
+        """
+        if due_column not in {"expires_at", "initiated_at", "updated_at"}:
+            raise ValueError(f"not a sweeper column: {due_column!r}")
+        uow.require_active()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"SELECT {_TOP_UP_COLUMNS} FROM hub.top_ups"  # noqa: S608 - literal columns
+                f" WHERE status = ANY(%s) AND {due_column} <= %s"
+                f" ORDER BY {due_column} LIMIT %s FOR UPDATE OF top_ups SKIP LOCKED",
+                [list(statuses), before, limit],
+            )
+            return [_row(record) for record in cursor.fetchall()]
 
     def list_initiated_before(self, *, before: datetime, limit: int) -> list[UUID]:
         """Top-ups whose provider call never came back, oldest first (the retry sweeper)."""
@@ -471,6 +499,111 @@ class ProviderEventRepository:
                     received_at,
                 ],
             )
+
+    def list_log(
+        self,
+        *,
+        provider: str | None = None,
+        statuses: Sequence[str] = (),
+        event_id: str | None = None,
+        received_after: datetime | None = None,
+        after_id: UUID | None = None,
+        limit: int = 25,
+    ) -> list[Mapping[str, Any]]:
+        """One page of the staff webhook log, newest id first.
+
+        The columns are exactly what ``hub_api`` may read (``db/schema.sql`` narrows the grant
+        and withholds ``payload``), so this statement works as the deployed role rather than
+        only as a superuser. ``top_up_id`` is recovered from the top-up the event names —
+        ``provider_txn_id`` is the provider's reference, suffixed for failures and reversals —
+        because the payload that would say it directly is not readable from here.
+        """
+        clauses: list[str] = []
+        params: list[Any] = []
+        if provider is not None:
+            clauses.append("e.provider = %s")
+            params.append(provider)
+        if statuses:
+            clauses.append("e.status = ANY(%s)")
+            params.append(list(statuses))
+        if event_id is not None:
+            clauses.append("e.event_id = %s")
+            params.append(event_id)
+        if received_after is not None:
+            clauses.append("e.received_at >= %s")
+            params.append(received_after)
+        if after_id is not None:
+            clauses.append("e.id < %s")
+            params.append(after_id)
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        with connection.cursor() as cursor:
+            # The interpolation adds only clauses built above from literal fragments, with every
+            # caller-supplied value bound as a parameter.
+            cursor.execute(
+                "SELECT e.id, e.provider, e.event_id, e.event_type, e.status, e.last_error,"  # noqa: S608
+                " e.received_at, e.processed_at, t.id FROM hub.provider_events e"
+                " LEFT JOIN hub.top_ups t ON t.provider = e.provider"
+                "  AND (t.provider_txn_id = e.provider_txn_id"
+                "       OR t.provider_ref = e.provider_txn_id)"
+                f"{where} ORDER BY e.id DESC LIMIT %s",
+                params,
+            )
+            columns = (
+                "id",
+                "provider",
+                "event_id",
+                "event_type",
+                "status",
+                "last_error",
+                "received_at",
+                "processed_at",
+                "top_up_id",
+            )
+            return [dict(zip(columns, record, strict=True)) for record in cursor.fetchall()]
+
+    def log_entry(self, event_id: UUID) -> Mapping[str, Any] | None:
+        """One log row, or ``None``; the same columns as :meth:`list_log`."""
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT e.id, e.provider, e.event_id, e.event_type, e.status, e.last_error,"
+                " e.received_at, e.processed_at, t.id FROM hub.provider_events e"
+                " LEFT JOIN hub.top_ups t ON t.provider = e.provider"
+                "  AND (t.provider_txn_id = e.provider_txn_id"
+                "       OR t.provider_ref = e.provider_txn_id)"
+                " WHERE e.id = %s",
+                [event_id],
+            )
+            record = cursor.fetchone()
+        if record is None:
+            return None
+        columns = (
+            "id",
+            "provider",
+            "event_id",
+            "event_type",
+            "status",
+            "last_error",
+            "received_at",
+            "processed_at",
+            "top_up_id",
+        )
+        return dict(zip(columns, record, strict=True))
+
+    def payload_of(self, event_id: UUID) -> Mapping[str, Any] | None:
+        """The stored envelope of an event, for the replay job (``hub_worker`` only)."""
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT payload FROM hub.provider_events WHERE id = %s", [event_id])
+            record = cursor.fetchone()
+        if record is None:
+            return None
+        payload = record[0]
+        # Django's psycopg backend deliberately loads jsonb as text (it decodes through its own
+        # JSONField loader), so the job decodes what the driver left as a string. The result is
+        # annotated because a raw cursor hands back ``Any``: this is the seam where a stored
+        # envelope becomes the mapping the replay job decodes.
+        decoded: Mapping[str, Any] = json.loads(payload) if isinstance(payload, str) else payload
+        return decoded
 
     def quarantine_counts(self, *, since: datetime) -> dict[str, int]:
         """Rejections per reason since ``since``: the counter the alert watches."""
