@@ -115,7 +115,11 @@ class LedgerReader:
         return row[0] if row else None
 
     def account(self, account_id: UUID) -> AccountView | None:
-        with connections[self._using].cursor() as cursor:
+        # Announced for the same reason ``wallet`` is: `hub.ledger_accounts` is forced-RLS and its
+        # `hub_api` policy asks `hub.user_has_permission('ledger.read')`, which reads `app.user_id`.
+        # A SELECT outside a transaction that announced the caller matches **no** policy and answers
+        # zero rows, so a system account would read as a 404 for the one role allowed to see it.
+        with announced(), connections[self._using].cursor() as cursor:
             cursor.execute(
                 f"SELECT {queries.ACCOUNT_COLUMNS} FROM hub.ledger_accounts WHERE id = %s",  # noqa: S608
                 [account_id],
@@ -164,7 +168,11 @@ class LedgerReader:
             f"SELECT {queries.ACCOUNT_COLUMNS} FROM hub.ledger_accounts"  # noqa: S608
             f" WHERE {' AND '.join(clauses)} ORDER BY id LIMIT %s"
         )
-        with connections[self._using].cursor() as cursor:
+        # The whole page is one announced transaction, like ``wallet`` — see the note there. This
+        # route reads every account of the ledger, and 14 of them are system accounts whose policy
+        # branch is the `ledger.read` permission: without the announcement the finance ledger screen
+        # shows an empty list while the transactions below it render normally.
+        with announced(), connections[self._using].cursor() as cursor:
             cursor.execute(sql, params)
             accounts = [AccountRow(row) for row in cursor.fetchall()]
             documents = []

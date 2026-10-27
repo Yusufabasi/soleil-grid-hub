@@ -29,6 +29,7 @@ from rest_framework.request import Request
 from hub.identity.contracts import Principal
 from hub.ledger import wiring
 from hub.ledger.api.views import CustomerWalletView
+from hub.shared.db import announced as announced_read
 from support.principals import SeededUser, seed_staff_user
 
 pytestmark = [pytest.mark.integration, pytest.mark.django_db]
@@ -205,3 +206,30 @@ def test_account_detail_reports_404(api: Any, finance_lead_maker: SeededUser) ->
         f"/api/v1/ledger/accounts/{uuid.uuid4()}", headers=finance_lead_maker.headers()
     )
     assert response.status_code == 404
+
+
+def test_account_reads_announce_the_caller(world: Any) -> None:
+    """Both account reads go through ``announced()``, and dropping that silently empties the screen.
+
+    ``hub.ledger_accounts`` is forced-RLS: the ``hub_api`` policy lets a wallet account through
+    when its customer exists, but a **system** account (``customer_id IS NULL``) only when
+    ``hub.user_has_permission('ledger.read')`` — and that reads ``app.user_id``, a setting the
+    application writes per transaction. A SELECT outside such a transaction matches no policy and
+    answers zero rows, which is what the running stack did: ``GET /ledger/accounts`` returned an
+    empty page for a finance officer while the 14 system accounts existed and ``/ledger/transactions``
+    rendered normally (that table has RLS disabled).
+
+    Why this is pinned as a mechanism rather than end to end: pytest-django wraps every test in one
+    transaction and ``set_config(..., true)`` is transaction-local, so a fixture's write leaves an
+    ``app.user_id`` behind for the whole test. A read that never announces its caller therefore
+    still sees rows **in this suite** — which is exactly how the defect survived slice 03 — while in
+    the running stack it does not. The reproduction and the fix were verified against the live
+    stack; this pins the two call sites so they cannot be dropped again.
+    """
+    reader = wiring.reader()
+
+    with mock.patch("hub.ledger.infrastructure.reader.announced", wraps=announced_read) as spy:
+        assert reader.list_accounts(limit=5), "the fixture's ledger has no accounts to read"
+        assert reader.account(world.account_id(world.fees.code)) is not None
+
+    assert spy.call_count == 2
