@@ -110,10 +110,10 @@ case "${SLICE}" in
       "cd backend && python -m pytest tests/contract/test_auth_matrix.py -q"
       "python -m pytest tests -q"
       "python tools/check_traceability.py"
-      # Slice T1's `provider-stub` service exists and is healthy (`make verify SLICE=T1` starts
-      # it), but the end-to-end case is 04.11's own work and is not written yet. The guard names
-      # both gaps instead of passing silently (docs/plan/progress.md).
-      'if [ ! -f backend/tests/e2e/test_topup_with_stub.py ]; then echo "tests/e2e/test_topup_with_stub.py is not written yet (task 04.11): see docs/plan/progress.md"; elif ! docker compose version >/dev/null 2>&1; then echo "docker is not available: the provider-stub end-to-end run is not exercised here (see docs/plan/progress.md)"; else make up && cd backend && python -m pytest tests/e2e/test_topup_with_stub.py -q; fi'
+      # The end-to-end case of Task 04.11: `make up` starts the provider double on the `stubs`
+      # profile, and the module provisions its own customer and meter so it can run as often as
+      # the suite runs. A skip is a failure here, like everywhere else in this script.
+      "make up && cd backend && python -m pytest tests/e2e/test_topup_with_stub.py -q -m e2e"
       "cd backend && python ../tools/check_django_config.py"
     )
     ;;

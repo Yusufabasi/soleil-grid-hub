@@ -43,6 +43,13 @@ class BearerJwtAuthentication(BaseAuthentication):
             raise Unauthenticated() from exc
 
         claims = wiring.tokens().verify(token)
+        # Bound before `load_principal`, not after: a customer's principal is read from
+        # `hub.customers`, which is forced-RLS, so the read itself has to announce the customer
+        # it is reading. A machine principal announces nothing — no policy grants it a row.
+        bind_context(
+            db_user_id=str(claims.subject_id) if claims.kind == "staff" else None,
+            db_customer_id=str(claims.subject_id) if claims.kind == "customer" else None,
+        )
         principal = wiring.users().load_principal(claims)
 
         # The logging processors downstream read this (docs/03 7.3); it is set only after the

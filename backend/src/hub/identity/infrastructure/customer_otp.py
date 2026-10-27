@@ -15,6 +15,7 @@ from django.db import connection
 
 from hub.identity.application.customer_otp import OtpRow
 from hub.identity.contracts import CustomerRecord
+from hub.shared.db import announced
 
 __all__ = ["CustomerDirectory", "OtpRepository"]
 
@@ -120,7 +121,9 @@ class CustomerDirectory:
         return _customer(row) if row is not None else None
 
     def by_id(self, customer_id: UUID) -> CustomerRecord | None:
-        with connection.cursor() as cursor:
+        # The caller *is* that customer (a portal token's subject), so the read announces them:
+        # `hub.customers` is forced-RLS and its `customers_self` policy asks `app.customer_id`.
+        with announced(), connection.cursor() as cursor:
             cursor.execute(
                 self._SELECT + "WHERE c.id = %s AND c.status = 'active' AND c.deleted_at IS NULL",
                 [customer_id],

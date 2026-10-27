@@ -35,6 +35,7 @@ from hub.customers.domain.errors import (
     TariffChangeTooLarge,
     VersionConflict,
 )
+from hub.shared.db import announced
 from hub.shared.errors import Duplicate
 
 __all__ = ["CustomerRepository", "PlanRepository", "SiteRepository", "TariffRepository"]
@@ -414,7 +415,7 @@ class CustomerRepository:
             raise
 
     def get(self, customer_id: UUID) -> CustomerRow | None:
-        with connection.cursor() as cursor:
+        with announced(), connection.cursor() as cursor:
             cursor.execute(
                 f"SELECT {_CUSTOMER_COLUMNS} FROM hub.customers "  # noqa: S608
                 "WHERE id = %s AND deleted_at IS NULL",
@@ -425,7 +426,7 @@ class CustomerRepository:
 
     def find_by_external_ref(self, external_ref: str) -> CustomerRow | None:
         """The idempotency key of the import: a rerun finds its own rows and skips them."""
-        with connection.cursor() as cursor:
+        with announced(), connection.cursor() as cursor:
             cursor.execute(
                 f"SELECT {_CUSTOMER_COLUMNS} FROM hub.customers WHERE external_ref = %s",  # noqa: S608
                 [external_ref],
@@ -435,7 +436,7 @@ class CustomerRepository:
 
     def find_by_phone(self, phone_e164: str) -> CustomerRow | None:
         """The active customer holding this number, for the identity login (D-11)."""
-        with connection.cursor() as cursor:
+        with announced(), connection.cursor() as cursor:
             cursor.execute(
                 f"SELECT {_CUSTOMER_COLUMNS} FROM hub.customers "  # noqa: S608
                 "WHERE phone_e164 = %s AND deleted_at IS NULL",
@@ -527,6 +528,6 @@ class CustomerRepository:
             f"WHERE {' AND '.join(filters)} ORDER BY id DESC LIMIT %s"
         )
         params.append(limit)
-        with connection.cursor() as cursor:
+        with announced(), connection.cursor() as cursor:
             cursor.execute(statement, params)
             return [_customer(row) for row in cursor.fetchall()]

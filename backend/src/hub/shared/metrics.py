@@ -19,6 +19,15 @@ __all__ = ["DEFAULT_BUCKETS", "REGISTRY", "counter", "histogram", "start_metrics
 
 logger = logging.getLogger(__name__)
 
+# The counters below are declared at *import*, which is before any entrypoint could have called
+# `start_metrics_server`. In a container that sets `PROMETHEUS_MULTIPROC_DIR` the first counter
+# opens a mmapped file in that directory immediately, so the directory has to exist by then: a
+# short-lived command (`manage.py migrate`, the sweepers) never reaches the server call, and on a
+# fresh /tmp tmpfs it would die with FileNotFoundError before it read a single argument.
+_MULTIPROC_DIR = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
+if _MULTIPROC_DIR:
+    os.makedirs(_MULTIPROC_DIR, exist_ok=True)
+
 # Golden-signal buckets from docs/09 section 5 (ack latency targets of the system).
 DEFAULT_BUCKETS = (0.1, 0.2, 0.3, 0.5, 1.0, 2.0, 5.0, 8.0)
 

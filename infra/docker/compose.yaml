@@ -445,7 +445,11 @@ services:
       STUB_HUB_BASE_URL: http://lb:8080
       STUB_JOURNAL_PATH: /var/lib/provider_stub/journal.jsonl
       STUB_SIMULATE_LATENCY: "1"
-      STUB_SEED: "20261027"
+      # The seed fixes the statement renderer and the `event_id` sequence (slice T1 step T1.3).
+      # A run that repeats the same flow therefore sends the same ids, which the hub correctly
+      # answers `duplicate` — so the slice 04 end-to-end module recreates this service under a
+      # seed of its own before it runs. The default here is the plain `make up` value.
+      STUB_SEED: ${STUB_SEED:-20261027}
     volumes:
       - providerstubdata:/var/lib/provider_stub
     ports:

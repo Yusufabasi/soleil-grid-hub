@@ -27,6 +27,7 @@ from django.db import connections
 from hub.ledger.contracts import AccountRef, AccountView, EntryView, TransactionView, WalletView
 from hub.ledger.infrastructure import queries
 from hub.shared.clock import current
+from hub.shared.db import announced
 
 __all__ = [
     "ZERO_UUID",
@@ -184,22 +185,28 @@ class LedgerReader:
         return documents
 
     def wallet(self, customer_id: UUID, currency: str) -> WalletView:
-        """The wallet document, with a zero balance when the wallet was never opened."""
+        """The wallet document, with a zero balance when the wallet was never opened.
+
+        One announced transaction for the whole document: the account, its balance and the
+        pending top-ups are three reads of forced-RLS tables, and a caller that announced only
+        one of them would see a wallet that exists appear empty.
+        """
         ref = AccountRef(
             kind="customer_wallet",
             currency=currency,  # type: ignore[arg-type]
             customer_id=customer_id,
         )
-        account_id = self.account_id(ref)
-        with connections[self._using].cursor() as cursor:
-            if account_id is None:
-                balance, as_of = 0, current()
-            else:
-                cursor.execute(queries.WALLET_BALANCE, [account_id])
-                row = cursor.fetchone()
-                balance = int(row[0]) if row else 0
-                as_of = row[1] if row else current()
-            pending = self._pending_top_ups(cursor, customer_id)
+        with announced():
+            account_id = self.account_id(ref)
+            with connections[self._using].cursor() as cursor:
+                if account_id is None:
+                    balance, as_of = 0, current()
+                else:
+                    cursor.execute(queries.WALLET_BALANCE, [account_id])
+                    row = cursor.fetchone()
+                    balance = int(row[0]) if row else 0
+                    as_of = row[1] if row else current()
+                pending = self._pending_top_ups(cursor, customer_id)
         return WalletView(
             customer_id=customer_id,
             ledger_account_id=account_id,
@@ -210,6 +217,16 @@ class LedgerReader:
         )
 
     def balance_minor(self, account_id: UUID) -> int:
+        """One account's balance for the posting path, which may not read the balance view.
+
+        ``LedgerService.post`` stages the low-balance warning from inside the transaction that
+        credited the wallet, and the role that serves webhooks posts through definer functions:
+        it holds no grant and no policy on ``hub.wallet_balances``. Under forced row-level
+        security that is not an error but zero rows, which would read as a balance of zero and
+        warn on every top-up, so a wallet is asked of the ledger's own definer function
+        (migration 0007). The customer's view of their wallet is unaffected: it is built from
+        ``hub.wallet_balances`` under the identity's policy, not from here.
+        """
         with connections[self._using].cursor() as cursor:
             cursor.execute(
                 f"SELECT {queries.ACCOUNT_COLUMNS} FROM hub.ledger_accounts WHERE id = %s",  # noqa: S608
@@ -218,7 +235,12 @@ class LedgerReader:
             row = cursor.fetchone()
             if row is None:
                 return 0
-            return self._balance(cursor, AccountRow(row))[0]
+            account = AccountRow(row)
+            if account.kind == "customer_wallet":
+                cursor.execute(queries.WALLET_BALANCE_MINOR, [account.id])
+                wallet = cursor.fetchone()
+                return int(wallet[0]) if wallet is not None and wallet[0] is not None else 0
+            return self._balance(cursor, account)[0]
 
     def system_balance(self, account_id: UUID) -> tuple[int, int]:
         """``(balance_minor, entry_count)`` of a system account: snapshot plus later entries."""
@@ -243,6 +265,21 @@ class LedgerReader:
             if row is None:
                 return None
             return self._transaction(cursor, TransactionRow(row))
+
+    def currency_of(self, transaction_id: UUID) -> str | None:
+        """A transaction's currency without reading the transaction or its entries.
+
+        ``LedgerService.reverse`` only needs the currency of the posting it is undoing, and the
+        webhook pool may read neither ``hub.ledger_transactions`` nor ``hub.ledger_entries``
+        (0004, 0006). ``None`` means the ledger has no such posting, which is how the caller
+        tells a missing transaction from a present one.
+        """
+        with connections[self._using].cursor() as cursor:
+            cursor.execute(queries.TRANSACTION_CURRENCY, [transaction_id])
+            row = cursor.fetchone()
+        if row is None or row[0] is None:
+            return None
+        return str(row[0])
 
     def list_transactions(
         self,

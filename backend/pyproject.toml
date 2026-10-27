@@ -123,11 +123,17 @@ disallow_incomplete_defs = false
 
 # --- pytest (docs/10 section 7.1) ----------------------------------------------------------
 [tool.pytest.ini_options]
+# `not e2e` in the default selection: the end-to-end module drives the compose stack and the
+# provider double, so it is never collected implicitly. A run that means it asks for the marker
+# on the command line (`-m e2e`, which overrides this), as `make verify SLICE=04` does.
 DJANGO_SETTINGS_MODULE = "hub.settings.test"
 testpaths = ["tests"]
-addopts = "-ra"
+addopts = "-ra -m 'not e2e'"
 markers = [
     "integration: needs Docker (testcontainers Postgres, Redis) or the compose stack",
     "concurrency: releases many real threads against PostgreSQL at once; run it repeatedly",
+    # End to end against the running compose stack (the provider double included). Never
+    # collected implicitly: the suite that owns this marker is run by `make verify SLICE=04`.
+    "e2e: drives the compose stack and the provider double; needs `make up`",
     "tc(id): traceability id from docs/10-test-strategy.md section 8",
 ]

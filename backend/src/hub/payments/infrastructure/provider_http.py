@@ -2,8 +2,19 @@
 
 The signature half is pure (``payments.domain.signature``) and is the only part the webhook
 trusts. The two calls out are deliberately small and use the standard library's HTTP client:
-the provider API is a form POST and a JSON GET, and a third-party HTTP library would add a
+the provider API is a JSON POST and a JSON GET, and a third-party HTTP library would add a
 dependency whose own retry and connection behaviour we would then have to disable.
+
+The wire dialect is the provider's, not ours: `tools/provider_stub/schemas/` is the contract of
+record for the two calls below (`collection_request.schema.json`,
+`collection_ack.schema.json`, `collection_status.schema.json`), and the double serves exactly
+that. Three consequences a reader should not have to rediscover from a 404:
+
+* the path carries the provider — ``POST {base}/providers/{provider}/collections`` — because one
+  base URL may front every channel;
+* the amount is a nested object, and the request has no field the schema does not name;
+* the provider's own id for the charge is ``provider_reference``, and *that* is what a later
+  status pull names, so it is what ``provider_txn_id`` carries.
 
 Three habits this adapter keeps:
 
@@ -100,14 +111,15 @@ class HttpProviderGateway:
         payload = json.dumps(
             {
                 "reference": req.reference,
-                "amount_minor": req.amount.amount_minor,
-                "currency": req.amount.currency,
+                "amount": {
+                    "amount_minor": req.amount.amount_minor,
+                    "currency": req.amount.currency,
+                },
                 "payer_msisdn": req.payer_msisdn,
-                "expires_at": req.expires_at.isoformat(),
             }
         ).encode("utf-8")
         request = urllib.request.Request(  # noqa: S310 - the URL comes from settings
-            f"{self._base_url}/collections",
+            f"{self._base_url}/providers/{self._provider}/collections",
             data=payload,
             method="POST",
             headers={"Content-Type": "application/json", "Accept": "application/json"},
@@ -127,14 +139,16 @@ class HttpProviderGateway:
         except (urllib.error.URLError, TimeoutError, OSError):
             # No answer is not a refusal; the use case records `pending_unknown`.
             raise TimeoutError("the provider did not answer the initiation") from None
-        txn_id = body.get("transaction_id") if isinstance(body, dict) else None
+        # `provider_reference`, not a transaction id: the provider keys the charge by the id it
+        # derived from our reference, and the status pull is by that same id.
+        txn_id = body.get("provider_reference") if isinstance(body, dict) else None
         return CollectionAck(accepted=True, provider_txn_id=str(txn_id) if txn_id else None)
 
     # --- pull -----------------------------------------------------------------------------
     def fetch_status(self, provider_txn_id: str) -> ProviderTxnStatus:
         """The provider's own view of a transaction (the pull of Task 04.8)."""
         request = urllib.request.Request(  # noqa: S310 - the URL comes from settings
-            f"{self._base_url}/transactions/{provider_txn_id}",
+            f"{self._base_url}/providers/{self._provider}/collections/{provider_txn_id}",
             method="GET",
             headers={"Accept": "application/json"},
         )

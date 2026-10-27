@@ -14,11 +14,13 @@ layer needs the policy and may not import Django.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from typing import Any, cast
 
-from django.db import connections
+from django.db import connections, transaction
 
+from hub.shared.context import db_customer_id_var, db_user_id_var
 from hub.shared.retry import (
     DEADLOCK_DETECTED,
     SERIALIZATION_FAILURE,
@@ -31,6 +33,7 @@ __all__ = [
     "DEADLOCK_DETECTED",
     "SERIALIZATION_FAILURE",
     "TRANSIENT_SQLSTATES",
+    "announced",
     "call_function",
     "retry_transient",
     "sqlstate_of",
@@ -41,6 +44,38 @@ _FUNCTION_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 # A cast is a PostgreSQL type name, optionally an array; it is written into the statement, so
 # it is validated the same way the function name is.
 _TYPE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*(?:\[\])?$")
+
+
+@contextmanager
+def announced(using: str = "default") -> Iterator[None]:
+    """Run a read inside a transaction that announces the request's caller (D-22, docs/04 10.9).
+
+    `hub.customers`, `hub.top_ups`, the wallet tables and `hub.ledger_accounts` are forced-RLS
+    and their `hub_api` policies ask `hub.site_visible(...)` / `hub.current_customer_id()`, which
+    read `app.user_id` and `app.customer_id`. Those settings are transaction-local on purpose
+    (PgBouncer pools transactions, so a session local would leak across requests), which means a
+    SELECT outside a transaction matches **no** policy and answers zero rows — a missing customer
+    that exists, a wallet that looks empty, a top-up that 404s.
+
+    So a read of one of those tables opens its own short transaction, exactly as a write already
+    does through the unit of work. Inside an existing transaction nothing is set: the enclosing
+    unit of work has already announced its caller, and re-announcing a different identity there
+    would outlive the savepoint.
+    """
+    connection = connections[using]
+    user_id = db_user_id_var.get() or ""
+    customer_id = db_customer_id_var.get() or ""
+    if connection.in_atomic_block or (not user_id and not customer_id):
+        yield
+        return
+    with transaction.atomic(using=using):
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT set_config('app.user_id', %s, true), "
+                "set_config('app.customer_id', %s, true)",
+                [user_id, customer_id],
+            )
+        yield
 
 
 def call_function(

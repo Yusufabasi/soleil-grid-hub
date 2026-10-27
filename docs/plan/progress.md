@@ -3,8 +3,8 @@
 Executor: implementing agent. Guide: `docs/plan/00-executor-guide.md`. Slices complete: **00**
 (`docs/plan/slice-00-walking-skeleton.md`), **01** (`docs/plan/slice-01-identity-rbac-approvals.md`),
 **02** (`docs/plan/slice-02-registry.md`), **03** (`docs/plan/slice-03-ledger-core.md`) and **04**
-(`docs/plan/slice-04-topup-webhook.md`, Tasks 04.6–04.11 finish it; the end-to-end half of 04.11
-needs `tests/e2e/test_topup_with_stub.py`, which is not written yet) and **T1**
+(`docs/plan/slice-04-topup-webhook.md`, Tasks 04.6–04.11 finish it, the end-to-end module
+included) and **T1**
 (`docs/plan/slice-T1-provider-stub.md`, the mobile-money double the local stack collects from and
 the prerequisite of slice 04's e2e run and slice 14's reconciliation tests). Update this file
 after every task (status, commit, test command and its summary line) and paste the full
@@ -1160,7 +1160,7 @@ Recorded rather than hidden: `payer_matched` stores a real comparison (both numb
 | 04.8 | Late credit, mismatch routing and pull verification | done | `cd backend && python -m pytest tests/unit/payments/test_routing.py tests/integration/payments/test_late_and_mismatch.py -q` -> `35 passed` (nine reasons in the documented priority order; `late` never routes to suspense; the pull runs at 10,000 USD minor and not at 9,999; a disagreeing pull sets `pending_unknown` and suspense; an unreachable provider is 503 with nothing stored) |
 | 04.9 | Provider reversals | done | `cd backend && python -m pytest tests/integration/payments/test_provider_reversal.py -q` -> `5 passed` (`reversed` with `shortfall_minor = 0`; after a simulated 80 % energy purchase the shortfall goes to `chargeback_receivable` with `ledger.chargeback_opened`; the reversal event has its own `-R` key; a duplicate reversal is a no-op; reversing an unconfirmed top-up is an exception and not a posting) |
 | 04.10 | Sweepers, webhook log and replay | done | `cd backend && python -m pytest tests/integration/payments/test_sweepers.py tests/integration/payments/test_sweeper_locking.py tests/integration/payments/test_webhook_events_api.py -q` -> `25 passed` (only `initiated`/`pending` expire, `pending_unknown` never; a retry after 60 s re-uses the same reference; a poll that finds success raises one `statement_only` exception and never credits; `SKIP LOCKED` skips a locked row; the log never returns a payload and replay enqueues one deduplicated job that credits an ignored event once the top-up exists) |
-| 04.11 | Wiring, conformance and end to end | partial | wiring, routes, jobs and the log are in place and covered by the suites above; `tests/contract/test_openapi_conformance.py` (schemathesis, track T4) and `tests/e2e/test_topup_with_stub.py` (needs slice T1's provider stub and `make up`) are not in this tree — the verify script names both gaps instead of passing silently |
+| 04.11 | Wiring, conformance and end to end | done | wiring, routes, jobs and the log are covered by the suites above, and `tests/e2e/test_topup_with_stub.py` drives a top-up through slice T1's provider double on the compose stack: `cd backend && python -m pytest tests/e2e/test_topup_with_stub.py -q -m e2e` -> `7 passed`, twice in a row (the section below has the cases and the eight defects the run found). `tests/contract/test_openapi_conformance.py` (schemathesis, track T4) is still not in this tree — the verify script names that one gap instead of passing silently |
 
 The whole slice, verified in one pass:
 
@@ -1203,6 +1203,149 @@ Defects found while finishing the slice, all fixed in the owning file:
    top-up collects on is part of its own request. Removed, and both `.env.example` and the compose
    `x-app-env` now say where the provider base URLs and webhook secrets come from instead — from a
    deployed environment's secret store, never from this repository.
+
+#### Task 04.11: the end-to-end module (this commit)
+
+`cd backend && python -m pytest tests/e2e/test_topup_with_stub.py -q -m e2e` -> `7 passed in
+157.84s`, twice in a row (the second run is what the per-run seed below exists for).
+
+`tests/e2e/test_topup_with_stub.py` is the half of 04.11 the previous commit had to leave open: it
+drives the running stack with nothing patched in. `make up` starts slice T1's provider double on
+the `stubs` profile, the hub's adapter collects from it over the compose network, HAProxy routes
+the double's deliveries to `be_webhooks`, and the ingest pool's five sync gunicorn workers verify
+the signature as `hub_ingest`. Every test provisions its own customer and meter over the staff API,
+because the seeded registry allows ten top-ups per meter per day and five per payer per hour.
+
+| Case | What it pins |
+|---|---|
+| `test_initiate_then_confirmed_via_stub` (TC-FR-02-1) | the adapter's dialect against the double's schemas: 202 and a collection carrying the right amount and payer, the same `Idempotency-Key` replaying to the same top-up with no second collection, then the double's own signed `payment.confirmed` crediting the wallet once (D-08 quote, `late` false, one delivery, `hub_status` 200) |
+| `test_stub_duplicate_mode_credits_once` | five deliveries of one event (`duplicate{count:4}`): one credit, five 200s |
+| `test_stub_late_mode_after_cancel` | a cancelled top-up whose money arrived anyway is `late` and credited (D-05) |
+| `test_stub_wrong_amount_goes_to_suspense` | a delivery for another amount is acked and touches no wallet |
+| `test_stub_reverse_after_posts_reversal` | the double's `-R` envelope posts the reversal, with its own transaction id and a zero balance |
+| `test_ack_p95_under_300ms_smoke` (TC-NFR-02-1) | 200 sequential signed deliveries of a `drop` collection through the balancer: p95 inside the 300 ms budget, one `accepted` and 199 `duplicate` |
+| `test_four_gunicorn_workers_fifty_parallel` (TC-FR-03-1) | fifty simultaneous copies of one event behind a barrier: one `accepted`, 49 `duplicate`, one credit |
+
+The module carries the `e2e` marker, which `pyproject.toml` now deselects by default
+(`addopts = "-ra -m 'not e2e'"`): a plain `pytest tests` never reaches for the compose stack, and
+`make verify SLICE=04` selects the marker explicitly. The verify script's "not written yet" guard is
+gone with the file it guarded.
+
+Eight defects, every one of them found by driving the real stack under the role that serves it
+rather than a fake under the harness superuser:
+
+1. **The api pool could not read the key it had just taken** (migration 0005). `_reserve` decides
+   whether an idempotency key is already held with `SELECT ... FOR UPDATE` on
+   `hub.idempotency_keys`; the baseline grants `hub_api` INSERT and UPDATE on that table and no
+   SELECT, so every idempotent route answered 500 under its own role while passing every test that
+   ran as the superuser.
+2. **`hub_ingest` could not read `hub.ledger_transactions`** (migration 0006). `LedgerWriter.post`
+   tells "post it" from "it is already there" by reading the posting key and the `created_xid` that
+   proves who wrote the row, and the webhook pool's role may write the ledger only through the
+   definer functions — so the first delivery answered 500 and the money stayed on the provider's
+   side while the provider retried.
+3. **A wallet balance the webhook pool may not read, and RLS's silent zero** (migration 0007).
+   `LedgerService.post` stages `wallet.low_balance` from the balance it has just credited, and
+   `hub_ingest` holds no grant and no policy on `hub.wallet_balances`. Under forced row-level
+   security that is not an error but *zero rows* — a balance of 0, and a low-balance warning on
+   every top-up. `hub.wallet_balance_minor(uuid)` is the definer read (one account in, one integer
+   out, no table), and `LedgerReader.balance_minor` asks the ledger for a wallet's balance while
+   the customer's own wallet view keeps reading the table under its identity's policy.
+4. **The reversal read the transaction and its entries** (migration 0008).
+   `LedgerService.reverse` needs one fact from the posting it undoes — its currency — and the reader
+   answered that by reading `TRANSACTION_COLUMNS` and the entries, neither of which the webhook
+   pool may read. `hub.transaction_currency(uuid)` is the definer read, `LedgerReader.currency_of`
+   the port method, and `LedgerNotFound` is still what a missing posting raises.
+5. **A read of a forced-RLS table outside a transaction matches no policy** (`hub.shared.db.announced`).
+   `app.user_id` and `app.customer_id` are set with `set_config(..., true)` — transaction-local, which
+   is exactly what makes them safe under PgBouncer's transaction pooling — so a SELECT outside a
+   transaction sees zero rows: a customer that exists is missing, a top-up that exists 404s. Reads
+   of `hub.customers`, `hub.top_ups` and `hub.ledger_accounts` now open the short transaction the
+   write path already had, the authentication class binds the two ids from the verified token
+   *before* it reads a customer's own principal, and the request middleware clears them per
+   request. This is what turned "the route answers 202 and the top-up is still `initiated`" into
+   the same row the response was built from.
+6. **The adapter spoke a dialect the provider does not.** It posted a flat
+   `amount_minor`/`currency` with an `expires_at` to `{base}/collections` and pulled
+   `{base}/transactions/{id}`; the provider-side contract of record
+   (`tools/provider_stub/schemas/`) names `POST /providers/{provider}/collections` with a nested
+   amount, keys the charge by its own `provider_reference`, and serves the pull at
+   `GET /providers/{provider}/collections/{reference}`. Every call would have 404'd against the
+   documented shape, which is precisely what an in-process fake can never show.
+7. **`HUB_ALLOWED_HOSTS` had no `lb`.** The double posts to `http://lb:8080` — the balancer, the
+   same route a real provider would take — HAProxy forwards the `Host` header unchanged, and
+   Django answered 400 `DisallowedHost` before any hub code ran. `.env.example` names `lb` and says
+   why.
+8. **A short-lived command died before it read its arguments** (`hub.shared.metrics`). Every
+   process declares its Prometheus counters at import, and with `PROMETHEUS_MULTIPROC_DIR` set the
+   first counter opens a file in that directory immediately — a directory only
+   `start_metrics_server` created. A command that never reaches that call (`manage.py migrate`, the
+   sweepers) exited on a fresh tmpfs with `FileNotFoundError`, which is what the stack's first
+   `migrate` container did.
+
+Two accommodations, both documented where they live rather than in a test helper:
+
+* **The double is recreated under a seed of this run's own** before the first case. `event_id`s
+  come from `random.Random(STUB_SEED)` (slice T1 step T1.3), so a second run of the same flow sends
+  the same ids — and the hub answers that second one `duplicate`, which is the *correct* answer to
+  a repeated event id and leaves every top-up pending. `STUB_SEED` is now overridable from the
+  environment (`${STUB_SEED:-20261027}` in the compose file) and the module sets it before it
+  starts: same contract, a different sequence of ids.
+* **The ack is read as the envelope it is.** The route answers
+  `{"data": {"status", "event_id"}}` (`WebhookAck`), and `duplicate{count}` is the number of
+  *repeats* the double adds to the original delivery — both were wrong in the first draft of the
+  module and are now pinned by the double's own contract rather than by a guess.
+
+The whole slice, verified in one pass after this commit — `make verify SLICE=04` ran all ten commands
+and printed `Slice 04 verification PASSED (10 commands).`:
+
+| Command | Result |
+|---|---|
+| `pytest tests/e2e/test_topup_with_stub.py -q -m e2e` | `7 passed` (twice in a row, and `7 passed in 104.26s` inside the verify run) |
+| `pytest tests -q` (whole backend) | `737 passed, 7 deselected` |
+| `pytest tests/unit/payments tests/integration/payments -q -m 'not concurrency'` | `151 passed, 8 deselected` |
+| `pytest tests/integration/payments/test_webhook_concurrency.py -q -m concurrency` (5 runs) | `8 passed` each |
+| `pytest tests/contract/test_auth_matrix.py -q` | `75 passed` |
+| `pytest ../tests -q` (root contracts) | `45 passed, 5 deselected` |
+| `python tools/check_traceability.py` | `0 error(s), 0 warning(s)` |
+| `make lint` (ruff, ruff format, mypy, import-linter, Django config) | clean |
+| `python tools/check_django_config.py` | `Django configuration checks passed` |
+
+The verify transcript, trimmed to the commands that carry this task's evidence:
+
+```
+$ make verify SLICE=04
+==> make lint
+All checks passed!
+==> make contracts
+... 0 error(s), 0 warning(s)
+==> cd backend && python -m pytest tests/unit/payments tests/integration/payments -q -m 'not concurrency'
+151 passed, 8 deselected in 26.66s
+==> cd backend && for i in 1 2 3 4 5; do python -m pytest tests/integration/payments/test_webhook_concurrency.py -q -m concurrency || exit 1; done
+8 passed in 18.88s
+8 passed in 19.45s
+8 passed in 18.74s
+8 passed in 19.16s
+8 passed in 19.15s
+==> if [ -f backend/tests/contract/test_openapi_conformance.py ]; then ... fi
+openapi conformance harness is not in this tree (track T4): see docs/plan/progress.md
+==> cd backend && python -m pytest tests/contract/test_auth_matrix.py -q
+75 passed in 26.82s
+==> python -m pytest tests -q
+45 passed, 5 deselected in 65.96s
+==> python tools/check_traceability.py
+0 error(s), 0 warning(s)
+==> make up && cd backend && python -m pytest tests/e2e/test_topup_with_stub.py -q -m e2e
+    ... fourteen containers Healthy (the provider double among them)
+7 passed in 104.26s
+==> cd backend && python ../tools/check_django_config.py
+Django configuration checks passed
+Slice 04 verification PASSED (10 commands).
+```
+
+Two commands in that list are the ones the e2e module changed: the marker selection is explicit
+(`-m e2e` on the command line overrides the default `not e2e`), and the guard that printed
+"tests/e2e/test_topup_with_stub.py is not written yet" is gone.
 
 Limitations, stated plainly. `tests/e2e/test_topup_with_stub.py` and the schemathesis harness are
 not written: the first needs the compose stack and slice T1's `provider-stub` service (now built and

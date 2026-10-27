@@ -12,6 +12,8 @@ __all__ = [
     "bind_context",
     "causation_id_var",
     "correlation_id_var",
+    "db_customer_id_var",
+    "db_user_id_var",
     "entrypoint_var",
     "principal_id_var",
     "request_id_var",
@@ -23,6 +25,12 @@ correlation_id_var: ContextVar[str | None] = ContextVar("correlation_id", defaul
 causation_id_var: ContextVar[str | None] = ContextVar("causation_id", default=None)
 principal_id_var: ContextVar[str | None] = ContextVar("principal_id", default=None)
 entrypoint_var: ContextVar[str | None] = ContextVar("entrypoint", default=None)
+# Who a read should announce to row-level security (`app.user_id` / `app.customer_id`). The
+# authentication class binds these from the verified token; `hub.shared.db.announced` applies
+# them to the transaction a read runs in. They are not the principal: they are the two ids the
+# policies ask for, and nothing reads them for an authorization decision.
+db_user_id_var: ContextVar[str | None] = ContextVar("db_user_id", default=None)
+db_customer_id_var: ContextVar[str | None] = ContextVar("db_customer_id", default=None)
 
 _VARS = {
     "request_id": request_id_var,
@@ -30,6 +38,8 @@ _VARS = {
     "causation_id": causation_id_var,
     "principal_id": principal_id_var,
     "entrypoint": entrypoint_var,
+    "db_user_id": db_user_id_var,
+    "db_customer_id": db_customer_id_var,
 }
 
 

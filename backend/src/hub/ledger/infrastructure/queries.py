@@ -21,7 +21,9 @@ __all__ = [
     "SYSTEM_BALANCE_SNAPSHOT",
     "TOPUPS_PER_SOURCE",
     "TRANSACTION_COLUMNS",
+    "TRANSACTION_CURRENCY",
     "WALLET_BALANCE",
+    "WALLET_BALANCE_MINOR",
 ]
 
 ACCOUNT_COLUMNS: Final = "id, code, kind, currency, customer_id, created_at"
@@ -31,10 +33,20 @@ TRANSACTION_COLUMNS: Final = (
     "created_by_user_id, approval_id, source_top_up_id, reverses_transaction_id"
 )
 
+# The currency of one transaction, asked of the ledger rather than read from its rows: the
+# posting path runs under the webhook pool's role, which may read neither the transaction nor
+# its entries (migration 0008).
+TRANSACTION_CURRENCY: Final = "SELECT hub.transaction_currency(%s)"
+
 # --- balances -------------------------------------------------------------------------------
 WALLET_BALANCE: Final = (
     "SELECT balance_minor, updated_at FROM hub.wallet_balances WHERE account_id = %s"
 )
+
+# The same balance, asked of the ledger instead of the table: the posting path runs under the
+# webhook pool's role, which has no policy on `wallet_balances` — a read there would be zero rows
+# rather than an error (migration 0007).
+WALLET_BALANCE_MINOR: Final = "SELECT hub.wallet_balance_minor(%s)"
 
 SYSTEM_BALANCE_SNAPSHOT: Final = (
     "SELECT balance_minor, entry_count, snapshot_date"

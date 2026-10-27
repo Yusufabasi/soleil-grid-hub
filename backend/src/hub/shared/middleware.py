@@ -79,6 +79,11 @@ class RequestContextMiddleware:
             request_id=request_id,
             correlation_id=correlation_id,
             entrypoint=str(getattr(settings, "SERVICE_NAME", "hub")),
+            # Cleared here, bound by the authentication class and reset with the rest in the
+            # `finally`: a request that reads a forced-RLS table must never inherit the identity
+            # of the request before it on the same worker.
+            db_user_id=None,
+            db_customer_id=None,
         )
         started = time.perf_counter()
         try:

@@ -31,6 +31,7 @@ from psycopg.types.json import Jsonb
 
 from hub.payments.contracts import ProviderEventRow, TopUpRow
 from hub.shared.contracts import UnitOfWork
+from hub.shared.db import announced
 
 __all__ = ["ProviderEventRepository", "TopUpRepository"]
 
@@ -143,7 +144,7 @@ class TopUpRepository:
             )
 
     def get(self, top_up_id: UUID) -> TopUpRow | None:
-        with connection.cursor() as cursor:
+        with announced(), connection.cursor() as cursor:
             cursor.execute(
                 f"SELECT {_TOP_UP_COLUMNS} FROM hub.top_ups WHERE id = %s",  # noqa: S608
                 [top_up_id],
@@ -153,7 +154,7 @@ class TopUpRepository:
 
     def peek_by_provider_ref(self, provider: str, provider_ref: str) -> TopUpRow | None:
         """The top-up a delivery names, read without a lock: the payer and pull pre-checks."""
-        with connection.cursor() as cursor:
+        with announced(), connection.cursor() as cursor:
             cursor.execute(
                 f"SELECT {_TOP_UP_COLUMNS} FROM hub.top_ups"  # noqa: S608 - literal columns
                 " WHERE provider = %s AND provider_ref = %s",
@@ -340,7 +341,7 @@ class TopUpRepository:
             params.append(after_id)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         params.append(limit)
-        with connection.cursor() as cursor:
+        with announced(), connection.cursor() as cursor:
             cursor.execute(
                 f"SELECT {_TOP_UP_COLUMNS_QUALIFIED}"  # noqa: S608 - literal column list
                 " FROM hub.top_ups t JOIN hub.customers c ON c.id = t.customer_id"

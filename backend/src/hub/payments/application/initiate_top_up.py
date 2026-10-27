@@ -219,7 +219,7 @@ class InitiateTopUpService:
             )
 
         ack = self._initiate(row)
-        return top_up_view(self._record_answer(top_up_id, ack, now))
+        return top_up_view(self._record_answer(top_up_id, ack, now, principal=principal))
 
     # --- provider -----------------------------------------------------------------------
     def _initiate(self, row: TopUpRow) -> CollectionAck | None:
@@ -242,23 +242,41 @@ class InitiateTopUpService:
         except Exception:  # noqa: BLE001 - any transport failure is an unknown outcome
             return None
 
-    def _record_answer(self, top_up_id: UUID, ack: CollectionAck | None, now: datetime) -> TopUpRow:
+    def _record_answer(
+        self, top_up_id: UUID, ack: CollectionAck | None, now: datetime, *, principal: Principal
+    ) -> TopUpRow:
         """Store what the provider said, in a second short transaction of its own."""
         if ack is None or ack.unknown:
-            return self._transition(top_up_id, PENDING_UNKNOWN, now, provider_txn_id=None)
+            return self._transition(
+                top_up_id, PENDING_UNKNOWN, now, provider_txn_id=None, principal=principal
+            )
         if ack.accepted:
-            return self._transition(top_up_id, PENDING, now, provider_txn_id=ack.provider_txn_id)
-        return self._transition(top_up_id, FAILED, now, provider_txn_id=None)
+            return self._transition(
+                top_up_id, PENDING, now, provider_txn_id=ack.provider_txn_id, principal=principal
+            )
+        return self._transition(top_up_id, FAILED, now, provider_txn_id=None, principal=principal)
 
     def _transition(
-        self, top_up_id: UUID, target: str, now: datetime, *, provider_txn_id: str | None
+        self,
+        top_up_id: UUID,
+        target: str,
+        now: datetime,
+        *,
+        provider_txn_id: str | None,
+        principal: Principal,
     ) -> TopUpRow:
-        """Walk the guard's edges to ``target`` and return the stored row."""
+        """Walk the guard's edges to ``target`` and return the stored row.
+
+        The second transaction announces the same caller as the first one: `hub.top_ups` is
+        forced-RLS and its `hub_api` policy asks whether the customer is visible, so a write that
+        announced nobody would match no row, update nothing and still return a row that never
+        moved — the failure this test found as "initiated" after a 202.
+        """
         row = self._top_ups.get(top_up_id)
         if row is None:  # pragma: no cover - the row was inserted in this same call
             raise PaymentNotFound()
         current = TopUp(id=row.id, status=row.status, expires_at=row.expires_at, late=row.late)
-        with self._unit_of_work(None):
+        with self._unit_of_work(principal):
             for step in current.path_to(target):
                 columns: dict[str, Any] = {"status": step, "updated_at": now}
                 if step == PENDING and provider_txn_id is not None:

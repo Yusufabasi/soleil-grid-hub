@@ -131,10 +131,12 @@ class LedgerServiceImpl:
         uow: UnitOfWork,
     ) -> ReversalResult:
         """Reverse a received top-up, at most once, with the shortfall rule of D-06."""
-        original = self._reader.transaction(original_transaction_id)
-        if original is None:
+        # The currency is read on its own, not with the transaction: a reversal arrives on the
+        # webhook pool, which may read neither the posting nor its entries, and the currency of
+        # the `Money` below is the only thing this use case needed from them (migration 0008).
+        currency = self._reader.currency_of(original_transaction_id)
+        if currency is None:
             raise LedgerNotFound()
-        currency = _currency_of(original)
         reversal_id, shortfall, replayed = self._writer.reverse(
             original_transaction_id,
             posting_key=posting_key,
@@ -222,10 +224,6 @@ class LedgerServiceImpl:
                     balance_minor=balance,
                 )
             )
-
-
-def _currency_of(transaction: TransactionView) -> str:
-    return transaction.lines[0].currency if transaction.lines else "USD"
 
 
 def _currency_of_lines(req: PostingRequest) -> str:
