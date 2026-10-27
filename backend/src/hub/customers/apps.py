@@ -21,10 +21,15 @@ class CustomersConfig(AppConfig):
         from hub.customers.wiring import (  # noqa: PLC0415
             register_approval_executors,
             register_csv_import,
+            register_directory,
         )
         from hub.shared.api.problem import register_catalogue  # noqa: PLC0415
 
         register_approval_executors()
+        # The read surface the neighbours use, and the lookup identity's one-time-code login
+        # resolves a phone number through: one registration, so sign-in and the directory
+        # cannot diverge on who counts as an active customer.
+        register_directory()
         # `manage.py import_registry --kind customers`: the same registration pattern, because
         # the command lives in `hub.shared` and may not import this module (docs/03 3.1).
         register_csv_import()

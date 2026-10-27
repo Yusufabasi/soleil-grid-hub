@@ -64,6 +64,22 @@ case "${SLICE}" in
       "if [ -f backend/tests/contract/test_openapi_conformance.py ]; then cd backend && python -m pytest tests/contract/test_openapi_conformance.py -q -k 'Auth or Approvals or Admin'; else echo 'openapi conformance harness is not in this tree (track T4): see docs/plan/progress.md'; fi"
     )
     ;;
+  02)
+    commands=(
+      "make lint"
+      "make contracts"
+      "cd backend && python -m pytest tests/unit/customers tests/integration/customers tests/integration/meters tests/architecture -q"
+      "cd backend && python -m pytest tests/contract/test_registry_matrix.py -q"
+      # Same guard as slice 01: the schemathesis harness is track T4 and not in this tree, so the
+      # step says so instead of collecting nothing. The deviation is recorded in progress.md.
+      "if [ -f backend/tests/contract/test_openapi_conformance.py ]; then cd backend && python -m pytest tests/contract/test_openapi_conformance.py -q -k 'Customers or Meters'; else echo 'openapi conformance harness is not in this tree (track T4): see docs/plan/progress.md'; fi"
+      # Two deviations from the slice's literal step 6, both in progress.md: the fixtures have to
+      # be in the database before the import can resolve KIN/BASIC, and the plan names an actor
+      # address that is not one of the published accounts.
+      "cd backend && python manage.py load_fixtures --settings hub.settings.test && python manage.py import_registry --kind customers --file tests/fixtures/registry/customers_ok.csv --dry-run --actor-email support@example.test --settings hub.settings.test"
+      "cd backend && python -m pytest tests -k 'slice01 or identity' -q"
+    )
+    ;;
   *)
     echo "unknown slice '${SLICE}': add its commands to tools/scripts/verify_slice.sh" >&2
     exit 2

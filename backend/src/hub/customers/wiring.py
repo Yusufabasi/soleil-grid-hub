@@ -20,11 +20,13 @@ from django.conf import settings
 
 from hub.customers.application.csv_import import CustomerCsvImporter
 from hub.customers.application.customers import CustomerService
+from hub.customers.application.directory import CustomerDirectoryImpl
 from hub.customers.application.sites_plans import PlanService, SiteService
 from hub.customers.application.tariffs import TariffChangeExecutor, TariffService
 from hub.customers.contracts import (
     CustomerStore,
     MeterCounter,
+    MeterLink,
     ProposalReceipt,
     SiteStore,
     WalletBalanceProbe,
@@ -49,6 +51,7 @@ __all__ = [
     "balance_probe",
     "clock",
     "customer_csv_importer",
+    "customer_directory",
     "customer_service",
     "customers",
     "ids",
@@ -58,11 +61,13 @@ __all__ = [
     "site_store",
     "register_approval_executors",
     "register_csv_import",
+    "register_directory",
     "reset",
     "sites",
     "tariffs",
     "unit_of_work",
     "use_meter_counter",
+    "use_meter_link",
 ]
 
 
@@ -82,13 +87,41 @@ _tariffs: TariffService | None = None
 _audit: AuditLog | None = None
 _customers: CustomerRepository | None = None
 _customer_service: CustomerService | None = None
+_directory: CustomerDirectoryImpl | None = None
 
 
 class _NoMeters:
-    """Until the meters module registers its own counter (``MetersConfig.ready``)."""
+    """Until `meters` registers its own adapters (``MetersConfig.ready``): nothing, no errors.
+
+    The default of both meter ports. Answering ``None`` for the link is the safe reading for a
+    probe-style question: with no meter known, nothing can be assigned and nothing verified.
+    """
 
     def per_site(self) -> dict[UUID, int]:
         return {}
+
+    def meter_for_customer(self, customer_id: UUID) -> UUID | None:  # noqa: ARG002 - port shape
+        return None
+
+    def customer_for_meter(self, meter_id: UUID) -> UUID | None:  # noqa: ARG002 - port shape
+        return None
+
+
+class _MeterLinkRef:
+    """Reads the registration at call time, so a link installed after this module started lands."""
+
+    def meter_for_customer(self, customer_id: UUID) -> UUID | None:
+        return _meter_link.meter_for_customer(customer_id)
+
+    def customer_for_meter(self, meter_id: UUID) -> UUID | None:
+        return _meter_link.customer_for_meter(meter_id)
+
+
+class _SignIns:
+    """Identity's session rows, reached through its wiring: this module reads no ``refresh_tokens``."""
+
+    def last_sign_in(self, customer_id: UUID) -> datetime | None:
+        return identity_wiring.last_customer_sign_in(customer_id)
 
 
 # A process-level registration, like the denial recorder: ``reset`` keeps it, because it is
@@ -96,6 +129,7 @@ class _NoMeters:
 # this module never imports ``hub.meters.infrastructure`` (the contract allows only its
 # contracts and events).
 _counter: MeterCounter = _NoMeters()
+_meter_link: MeterLink = _NoMeters()
 
 
 def reset() -> None:
@@ -107,10 +141,11 @@ def reset() -> None:
     permission bug rather than the missing registration it is.
     """
     global _clock, _ids, _sites, _plans, _tariffs, _audit, _customers, _customer_service  # noqa: PLW0603
-    global _probe  # noqa: PLW0603
+    global _probe, _directory  # noqa: PLW0603
     with _lock:
         _clock = _ids = _sites = _plans = _tariffs = _audit = _customers = None
         _customer_service = None
+        _directory = None
         _probe = _NoWallet()
 
 
@@ -158,6 +193,16 @@ def use_meter_counter(counter: MeterCounter) -> None:
 
 def meter_counter() -> MeterCounter:
     return _counter
+
+
+def use_meter_link(link: MeterLink) -> None:
+    """Install the customer-to-meter lookup; called by ``hub.meters`` at app start-up."""
+    global _meter_link  # noqa: PLW0603
+    _meter_link = link
+
+
+def meter_link() -> MeterLink:
+    return _meter_link
 
 
 def unit_of_work(principal: Principal | None = None) -> UnitOfWork:
@@ -230,6 +275,37 @@ def tariffs() -> TariffService:
                     approvals=_IdentityApprovals(),
                 )
     return _tariffs
+
+
+def customer_directory() -> CustomerDirectoryImpl:
+    """The read surface neighbours use, and the lookup identity's sign-in resolves through.
+
+    One object serves both roles on purpose: `identity` binds ``CustomerLookup``, while the
+    ``CustomerDirectory`` half is what slices 04, 06 and 12 read. Sharing it means a customer's
+    locale, status and last sign-in are read by one implementation, not two that could drift.
+    """
+    global _directory  # noqa: PLW0603
+    if _directory is None:
+        with _lock:
+            if _directory is None:
+                _directory = CustomerDirectoryImpl(
+                    clock=clock(),
+                    customers=CustomerRepository(),
+                    plans=PlanRepository(),
+                    meters=_MeterLinkRef(),
+                    sign_ins=_SignIns(),
+                )
+    return _directory
+
+
+def register_directory() -> None:
+    """Publish the directory as identity's ``CustomerLookup`` (called by ``CustomersConfig.ready``).
+
+    Registration rather than import: identity may not see this module's application layer, so
+    the one-time-code login asks for a lookup and this module answers (the seam
+    ``identity.wiring.use_customer_lookup``).
+    """
+    identity_wiring.use_customer_lookup(customer_directory())
 
 
 def customer_store() -> CustomerStore:

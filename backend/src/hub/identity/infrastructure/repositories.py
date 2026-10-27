@@ -527,6 +527,21 @@ class SessionRepository:
             row = cursor.fetchone()
         return _session(row) if row is not None else None
 
+    def last_sign_in_at(self, customer_id: UUID) -> datetime | None:
+        """The customer's most recent completed sign-in: their newest refresh session (D-21).
+
+        A customer row has no ``last_login_at`` column, and a session row survives a logout,
+        so the maximum ``issued_at`` is the honest answer the dormancy rule reads. The query
+        lives here because ``hub.refresh_tokens`` is this module's table.
+        """
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT max(issued_at) FROM hub.refresh_tokens WHERE customer_id = %s",
+                [customer_id],
+            )
+            row = cursor.fetchone()
+        return cast("datetime | None", row[0]) if row is not None else None
+
     def family_first_issued_at(self, family_id: UUID) -> datetime | None:
         with connection.cursor() as cursor:
             cursor.execute(

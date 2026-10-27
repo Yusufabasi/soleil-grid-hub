@@ -16,6 +16,8 @@ __all__ = [
     "AuditEntry",
     "AuditLog",
     "AuditOutcome",
+    "CustomerLookup",
+    "CustomerRecord",
     "Principal",
     "PrincipalKind",
     "SessionRow",
@@ -44,6 +46,32 @@ class TokenClaims:
     @property
     def has_mfa(self) -> bool:
         return self.acr in {"mfa", "phr"}
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerRecord:
+    """The little a customer sign-in needs to know about a customer (D-21).
+
+    ``last_login_at`` is a session fact, not a column: it is derived from the customer's
+    refresh sessions, so a dormant account is recognised without a second field to maintain.
+    """
+
+    id: UUID
+    locale: str
+    last_login_at: datetime | None
+
+
+class CustomerLookup(Protocol):
+    """Finds an active customer for a sign-in (slice 02 binds this to the registry).
+
+    ``identity`` owns the one-time-code flow; ``hub.customers`` owns the rows, so the lookup
+    is contributed at start-up rather than imported (the module DAG lets ``customers`` see
+    ``identity``, never the reverse).
+    """
+
+    def find_active_by_phone(self, phone_e164: str) -> CustomerRecord | None: ...
+
+    def by_id(self, customer_id: UUID) -> CustomerRecord | None: ...
 
 
 @dataclass(frozen=True, slots=True)

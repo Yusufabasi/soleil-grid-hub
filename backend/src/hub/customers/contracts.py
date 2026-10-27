@@ -21,11 +21,13 @@ __all__ = [
     "CustomerStore",
     "CustomerView",
     "EnergyQuote",
+    "MeterLink",
     "PlanRow",
     "PlanStore",
     "PlanTariffRow",
     "PlanView",
     "ProposalReceipt",
+    "SignInProbe",
     "SiteRow",
     "SiteStore",
     "SiteView",
@@ -289,3 +291,28 @@ class MeterCounter(Protocol):
     """Meters per site, for the computed ``meter_count`` the Site document carries."""
 
     def per_site(self) -> dict[UUID, int]: ...
+
+
+class MeterLink(Protocol):
+    """The customer-to-meter link, as ``CustomerDirectory`` exposes it.
+
+    The meter rows belong to ``hub.meters``, and this module may not import that one (the
+    module DAG), so the reading adapter is contributed by ``MetersConfig.ready`` exactly like
+    ``MeterCounter``. Answers are ``None`` rather than errors: a customer with no meter is a
+    normal state for the callers that ask.
+    """
+
+    def meter_for_customer(self, customer_id: UUID) -> UUID | None: ...
+
+    def customer_for_meter(self, meter_id: UUID) -> UUID | None: ...
+
+
+class SignInProbe(Protocol):
+    """A customer's most recent completed sign-in; ``hub.refresh_tokens`` is identity's table.
+
+    ``CustomerDirectory.get`` carries only fields this module owns. The one fact identity
+    needs for the dormancy rule (D-21) arrives through this port, whose adapter is
+    ``identity.wiring.last_customer_sign_in``, so the registry never reads a session row.
+    """
+
+    def last_sign_in(self, customer_id: UUID) -> datetime | None: ...

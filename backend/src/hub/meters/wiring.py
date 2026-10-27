@@ -24,8 +24,8 @@ from hub.identity import wiring as identity_wiring
 from hub.identity.contracts import AuditLog, Principal
 from hub.meters.application.csv_import import MeterCsvImporter
 from hub.meters.application.registry import CreditProbe, MeterService
-from hub.meters.contracts import CustomerFacts, RegistryFacts, SiteFacts
-from hub.meters.infrastructure.repositories import MeterRepository
+from hub.meters.contracts import CustomerFacts, MeterRegistry, RegistryFacts, SiteFacts
+from hub.meters.infrastructure.repositories import MeterRegistryImpl, MeterRepository
 from hub.shared import clock as kernel_clock
 from hub.shared.contracts import UnitOfWork
 from hub.shared.ids import Uuid7Generator
@@ -37,6 +37,7 @@ __all__ = [
     "ids",
     "meter_service",
     "register_csv_import",
+    "registry",
     "registry_facts",
     "repository",
     "reset",
@@ -138,6 +139,17 @@ def repository() -> MeterRepository:
             if _repository is None:
                 _repository = MeterRepository()
     return _repository
+
+
+def registry() -> MeterRegistry:
+    """This module's ``MeterRegistry``: the meter facts a money or credit path may rely on.
+
+    Slice 04's top-up and slice 06's token issuance call ``get`` and
+    ``assert_usable_for_credit`` instead of reading ``hub.meters`` themselves; the adapter
+    composes the repository here so both the registry's own use cases and the neighbours reach
+    the same rows through the same code.
+    """
+    return MeterRegistryImpl(repository())
 
 
 def unit_of_work(principal: Principal | None = None) -> UnitOfWork:

@@ -14,9 +14,9 @@ from __future__ import annotations
 from uuid import UUID
 
 from hub.customers.contracts import CustomerStore, SiteStore
-from hub.meters.contracts import CustomerFacts, SiteFacts
+from hub.meters.contracts import CustomerFacts, MeterStore, SiteFacts
 
-__all__ = ["RegistryFactsAdapter"]
+__all__ = ["MeterLinkAdapter", "RegistryFactsAdapter"]
 
 
 class RegistryFactsAdapter:
@@ -51,3 +51,29 @@ class RegistryFactsAdapter:
         if row is None:
             return None
         return CustomerFacts(id=row.id, site_id=row.site_id, status=row.status)
+
+
+class MeterLinkAdapter:
+    """``customers.contracts.MeterLink`` over the meter rows (Task 02.9).
+
+    The registry needs the customer-to-meter link (``docs/03`` 2.3 lists it among the things
+    ``customers`` owns), but the rows are this module's and the module DAG runs only one way,
+    so ``customers`` cannot read them itself. This adapter is the answer, installed by
+    ``MetersConfig.ready`` through ``customers.wiring.use_meter_link``.
+
+    Both directions read at call time and answer ``None`` rather than raising: an unassigned
+    meter and a customer with no meter are ordinary states, not errors, and every caller
+    (top-ups, token issuance) asks a question whose honest answer is sometimes "none".
+    """
+
+    def __init__(self, meters: MeterStore) -> None:
+        self._meters = meters
+
+    def meter_for_customer(self, customer_id: UUID) -> UUID | None:
+        """The customer's active meter, if any: v1 allows one per customer (Plan notes 5)."""
+        rows = self._meters.list_scoped(site_ids=None, customer_id=customer_id, limit=1)
+        return rows[0].id if rows else None
+
+    def customer_for_meter(self, meter_id: UUID) -> UUID | None:
+        meter = self._meters.get(meter_id)
+        return meter.customer_id if meter is not None else None

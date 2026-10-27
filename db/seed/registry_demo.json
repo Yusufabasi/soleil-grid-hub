@@ -1,0 +1,185 @@
+{
+  "note": "Registry demo data for local development and CI (slice 02, D-38). Every value is synthetic: the sites, plans, customers, meters and the one conflict-of-interest link exist only inside a throwaway database, and `manage.py load_fixtures` refuses to run anywhere a real deployment could be. The first site and plan repeat the ids in test_users.json on purpose, so the demo stack has exactly two sites and two plans rather than a duplicate of the same code with another id.",
+  "sites": [
+    {
+      "id": "0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f0001",
+      "code": "LSHI",
+      "name": "Lubumbashi",
+      "country_code": "CD",
+      "currency": "USD",
+      "timezone": "Africa/Lubumbashi"
+    },
+    {
+      "id": "0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f0011",
+      "code": "KIN",
+      "name": "Kinshasa",
+      "country_code": "CD",
+      "currency": "USD",
+      "timezone": "Africa/Lubumbashi"
+    }
+  ],
+  "plans": [
+    {
+      "id": "0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f0002",
+      "code": "BASIC",
+      "name": "Basic",
+      "currency": "USD",
+      "min_topup_minor": 100,
+      "max_topup_minor": 100000,
+      "status": "active"
+    },
+    {
+      "id": "0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f0012",
+      "code": "SOLAR_PLUS",
+      "name": "Solar Plus",
+      "currency": "USD",
+      "min_topup_minor": 500,
+      "max_topup_minor": 500000,
+      "status": "active"
+    }
+  ],
+  "tariffs": [
+    {
+      "id": "0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f0021",
+      "plan_code": "BASIC",
+      "tariff_minor_per_kwh": 1200,
+      "effective_from": "2026-10-01T00:00:00Z"
+    },
+    {
+      "id": "0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f0022",
+      "plan_code": "SOLAR_PLUS",
+      "tariff_minor_per_kwh": 900,
+      "effective_from": "2026-10-01T00:00:00Z"
+    }
+  ],
+  "tariff_approval": {
+    "maker_email": "finance@example.test",
+    "approver_email": "finance.lead@example.test",
+    "action": "tariff.change"
+  },
+  "customers": [
+    {
+      "id": "0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f0101",
+      "external_ref": "EXT-001",
+      "full_name": "Awa Diallo",
+      "phone_e164": "+243810000101",
+      "email": "awa.diallo@example.test",
+      "language": "fr",
+      "status": "active",
+      "site_code": "LSHI",
+      "plan_code": "BASIC"
+    },
+    {
+      "id": "0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f0102",
+      "external_ref": "EXT-002",
+      "full_name": "Blaise Mukendi",
+      "phone_e164": "+243810000102",
+      "email": "blaise.mukendi@example.test",
+      "language": "fr",
+      "status": "active",
+      "site_code": "LSHI",
+      "plan_code": "SOLAR_PLUS"
+    },
+    {
+      "id": "0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f0103",
+      "external_ref": "EXT-003",
+      "full_name": "Chantal Ilunga",
+      "phone_e164": "+243810000103",
+      "email": null,
+      "language": "en",
+      "status": "active",
+      "site_code": "KIN",
+      "plan_code": "BASIC"
+    },
+    {
+      "id": "0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f0104",
+      "external_ref": "EXT-004",
+      "full_name": "Dieudonne Kabongo",
+      "phone_e164": "+243810000104",
+      "email": "dieudonne.kabongo@example.test",
+      "language": "fr",
+      "status": "suspended",
+      "site_code": "KIN",
+      "plan_code": "SOLAR_PLUS"
+    },
+    {
+      "id": "0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f0105",
+      "external_ref": "EXT-005",
+      "full_name": "Esther Ndaya",
+      "phone_e164": "+243810000105",
+      "email": "esther.ndaya@example.test",
+      "language": "en",
+      "status": "active",
+      "site_code": "LSHI",
+      "plan_code": "BASIC"
+    },
+    {
+      "id": "0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f0106",
+      "external_ref": "EXT-006",
+      "full_name": "Fiston Banza",
+      "phone_e164": "+243810000106",
+      "email": null,
+      "language": "fr",
+      "status": "active",
+      "site_code": "KIN",
+      "plan_code": "BASIC"
+    }
+  ],
+  "meters": [
+    {
+      "id": "0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f0201",
+      "serial_no": "SN-0001",
+      "site_code": "LSHI",
+      "customer_external_ref": "EXT-001",
+      "status": "active",
+      "firmware": "1.4.2"
+    },
+    {
+      "id": "0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f0202",
+      "serial_no": "SN-0002",
+      "site_code": "LSHI",
+      "customer_external_ref": "EXT-002",
+      "status": "active",
+      "firmware": "1.4.2"
+    },
+    {
+      "id": "0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f0203",
+      "serial_no": "SN-0003",
+      "site_code": "KIN",
+      "customer_external_ref": "EXT-003",
+      "status": "active",
+      "firmware": "1.3.9"
+    },
+    {
+      "id": "0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f0204",
+      "serial_no": "SN-0004",
+      "site_code": "KIN",
+      "customer_external_ref": "EXT-004",
+      "status": "offline",
+      "firmware": "1.3.9"
+    },
+    {
+      "id": "0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f0205",
+      "serial_no": "SN-0005",
+      "site_code": "LSHI",
+      "customer_external_ref": "EXT-005",
+      "status": "active",
+      "firmware": "1.4.2"
+    },
+    {
+      "id": "0192f3a4-7b1c-7d2e-8a3f-5c6d7e8f0206",
+      "serial_no": "SN-0006",
+      "site_code": "KIN",
+      "customer_external_ref": null,
+      "status": "provisioned",
+      "firmware": null
+    }
+  ],
+  "conflict_links": [
+    {
+      "staff_email": "finance.lead@example.test",
+      "customer_external_ref": "EXT-001",
+      "relation": "relative"
+    }
+  ]
+}

@@ -13,7 +13,8 @@ from uuid import UUID
 
 from django.db import connection
 
-from hub.identity.application.customer_otp import CustomerRecord, OtpRow
+from hub.identity.application.customer_otp import OtpRow
+from hub.identity.contracts import CustomerRecord
 
 __all__ = ["CustomerDirectory", "OtpRepository"]
 

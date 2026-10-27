@@ -72,6 +72,7 @@ the per-worker signing key and the missing `api/` in the image, which single-pro
 | 02.6 | Meters registry and assignment | done | this commit | `cd backend && python -m pytest tests/integration/meters/test_meters_registry.py -q` -> `16 passed` (operations creates a meter and reads it back `provisioned`, version 1, with a `Location`, a `W/"v1"` ETag on the read, and the site document's computed `meter_count` of 1; the document says `hardware_model: unknown` while the model the caller gave is in the `registry.meter.created` audit detail; a duplicate serial is 409 `serial_conflict`; a create that names a customer writes the `meter_assignments` history row through the trigger; assigning a customer of another site is 422 `site_mismatch` on `/customer_id`, an unknown or inactive customer 422 on the same field, and a refused assignment writes nothing; reassignment keeps every past pair in `meter_assignments` and unassignment (`customer_id: null`) leaves the history alone while an absent field leaves the owner alone; `PATCH` without `If-Match` is 428, with a stale one 412, with the current one 200 and the next ETag; lifecycle: `provisioned` is not settable, `active` -> `offline` -> `decommissioned` works, and a decommissioned meter refuses every later write and a second DELETE with 409 `invalid_state_transition`; a decommission with 5 Wh on the meter is 409 `meter_has_credit` through both DELETE and `status: decommissioned`, and 0 Wh decommissions; `assert_usable_for_credit` answers `meter_decommissioned` and `meter_not_owned`; an operations engineer bound to site A gets 404 on B's meter for read, patch and delete, B's meter is absent from the list and `?site_id=B` is empty, and creating at B is 404; a portal token lists and reads only its own meter and gets 404 for another; `listCustomerMeters` pages a customer's meters and 404s for an operator outside the customer's site; an integrator read without an API key is 401; two threads assigning one meter with the same `If-Match` produce one 200 and one 409/412 with exactly one history row, and two creates with one serial produce one 201 and one 409 with one row in `hub.meters`); `pytest -q` -> `446 passed`; root `pytest tests -q` -> `42 passed, 5 deselected`; `mypy src` -> 208 files clean; `ruff check`/`ruff format --check` clean; `lint-imports` -> `119 kept, 0 broken`
 | 02.7 | Localised registry errors and bilingual strings | done | this commit | `cd backend && python -m pytest tests/integration/customers/test_locale.py -q` -> `5 passed` (a support agent whose account says `fr` creates a duplicate number and reads the French `duplicate_phone` sentence with `code` unchanged at `duplicate_resource`, while the same request as an `en` account answers the English sentence — no `Accept-Language` header in either; a French caller reading a missing customer gets the French 404 sentence even when the browser sends `en-GB`, so the stored language wins; with no stored language `fr-CA` answers French and `es-ES` answers English, both 401 `unauthenticated`; all twelve registry message keys have an `en` and an `fr` entry that are non-empty and textually different; each module's JSON reaches the handler verbatim, and an uncatalogued key still answers the generic sentence in the caller's language); `pytest -q` -> `452 passed`; `mypy src` -> 209 files clean; `ruff check`/`ruff format --check` clean; `lint-imports` -> `119 kept, 0 broken`
 | 02.8 | All-or-nothing CSV import for customers and meters | done | this commit | `cd backend && python -m pytest tests/integration/customers/test_csv_import.py -q` -> `11 passed` (`customers_one_bad_row.csv` exits 2 with `errors: [{row: 3, code: duplicate_phone}]` and writes no row, then the fixed file inserts 2 and a rerun inserts 0 with `skipped_existing: 2`; a `=cmd()` name is stored as `'=cmd()` and row 2 is listed under `neutralised`; `HUB_IMPORT_MAX_ROWS = 1` and `HUB_IMPORT_MAX_BYTES = 32` each exit 2 with no insert; an unknown `site_code` is `unknown_site` at row 2; two rows claiming one serial exit 2 with `serial_conflict` at row 3 and no meter inserted; the meters file links `EXT-001` to `SN-0001` and leaves `SN-0002` unassigned; a dry run reports `would_insert: 2` and writes neither a customer nor an audit row; the run leaves exactly one `registry.import.completed` row whose details are the counts plus `outcome`, with no name or number; a Latin-1 file exits 2 while a BOM-prefixed one imports; an `operations_engineer` running the customers import and an unknown address both exit 3 with nothing written); `pytest tests/integration/customers tests/integration/meters tests/architecture tests/unit/customers -q` -> `158 passed`; `pytest -q` -> `463 passed`; `mypy` -> 262 files clean; `ruff check`/`ruff format --check` clean; `lint-imports` -> `119 kept, 0 broken`
+| 02.9 | Registry authorization matrix, directory and demo seed | done | this commit | `cd backend && python -m pytest tests/contract/test_registry_matrix.py tests/integration/customers/test_directory.py -q` -> `28 passed` (all 21 routed operations tagged Customers or Meters called with a real EdDSA token per staff role and with a real portal token: allowed cells never 401/403 and every other cell does; the nine `x-site-scoped` registry operations answer 404 — never 403 — for a foreign-site id and the lists omit it, while the same caller reads its own site; a denied registry read writes `authz.denied`; the directory quotes 1 minor at 1,000/kWh as exactly 1 Wh, keeps the older version in force before the newer `effective_from`, floors 1001 minor at 1,250/kWh to 800 Wh without rounding up and refuses an instant with no version in force; `current_plan` carries the version in force; the meter link answers both directions and returns `None` for an unassigned meter or a meterless customer; the same object is identity's `CustomerLookup`, so a suspended customer is invisible and `last_login_at` reads identity's sessions; `load_fixtures` seeds the new `db/seed/registry_demo.json` — two sites, two plans with an active tariff and its approval each, six customers, six meters (one unassigned) and one conflict-of-interest link — idempotently, and the directory reads the seeded EXT-001 back at 1,200); `pytest tests/unit/customers tests/integration/customers tests/integration/meters tests/architecture -q` -> `163 passed`; `pytest tests/unit/identity tests/integration/identity tests/integration/admin tests/contract -q` -> `252 passed`; `tests/integration/identity/test_fixtures.py` -> `6 passed`; root contract tests -> `30 passed, 4 skipped` (the four need Docker, absent in this runner); `mypy src` -> 213 files clean; `ruff check`/`ruff format --check` clean; `lint-imports` -> `119 kept, 0 broken`
 
 ## Assumptions
 
@@ -594,6 +595,48 @@ the per-worker signing key and the missing `api/` in the image, which single-pro
   (which need no contract rule) stayed green, so `make up` looked healthy. The image now copies
   `api/`, which is what `tools/check_django_config.py` and the architecture tests already assumed.
 
+
+- **02.9 the directory is one object with two public faces**: `CustomerDirectoryImpl` answers
+  `customers.contracts.CustomerDirectory` and identity's `CustomerLookup`. `CustomerRecord` and
+  `CustomerLookup` moved to `identity/contracts.py` so the registry can implement identity's
+  surface without importing its application layer, and `CustomersConfig.ready` registers the
+  instance through `identity.wiring.use_customer_lookup`. The bearer path
+  (`UserRepository._customer_principal`) still uses identity's own adapter: it runs before a
+  unit of work and therefore before any RLS claim, and unifying it belongs to slice 12's
+  customer `GET /me`; both read the same rows under the same "active only" rule.
+- **02.9 the meter link is a registration in the meters direction**: `customers` may not import
+  `meters` at all (the module DAG), so `MeterLinkAdapter` lives in
+  `meters/application/directory.py` over `MeterStore` and `MetersConfig.ready` installs it
+  through `customers.wiring.use_meter_link`. It reads at call time and answers `None` rather
+  than raising: "this customer has no meter" is a real answer for the top-up and token callers.
+- **02.9 a quote floors and refuses rather than guessing**: `energy_wh = amount_minor * 1000 //
+  tariff_minor_per_kwh` in integer arithmetic (D-08), so the hub grants only whole watt-hours it
+  was paid for; an instant before every version is `422 invalid_tariff` with
+  `no_tariff_in_force` at `/plan_id`, not a zero quote that would sell energy for free.
+- **02.9 the demo seed rides with `load_fixtures`**: `db/seed/registry_demo.json` is loaded in
+  the same transaction, after the identity fixtures, under the administrator's RLS claim
+  (`hub.customers` is forced RLS). It is idempotent by fixed ids, and an `active`
+  `plan_tariffs` row gets the decided approval the schema demands
+  (`ck_plan_tariffs_approved`) from the two finance accounts the identity seed publishes. The
+  second site is `KIN` so the slice's own `customers_ok.csv` verification import resolves its
+  `site_code`; the demo still has exactly two sites and two plans.
+- **02.9 verification step 6 deviates twice, and both are in the verify script**: the plan names
+  `support.demo@soleilgrid.example`, an address no seed publishes, and assumes `KIN`/`BASIC`
+  already exist in the test database. The script runs `load_fixtures --settings
+  hub.settings.test` first and imports as the published `support@example.test` account; the
+  dry run then reports `errors: []` and skips the two rows whose `external_ref` the demo already
+  holds.
+- **02.9 the matrix is bounded by what is mounted**: `getCustomerWallet`, `listMeterReadings`
+  and `listMeterTokens` are declared for slices 03, 06 and 08 and have no route here, so the
+  test resolves every path first (the rule slice 01's matrix set) rather than asserting 404s
+  that prove nothing about authorization. Integrator and gateway keys arrive in slice 15, so
+  their cells are pinned as refused for every credential this build can present.
+- **02.9 the cloud runner has no Docker**: the suites were run against locally built PostgreSQL
+  16.2 and Redis 7.2.5 standing in for the testcontainers fixtures, because this runner cannot
+  open the Docker socket. With the bundled Redis 6, eleven identity tests fail on
+  `EXPIRE ... NX`; with 7.2.5 they pass. The four `test_schema_in_postgres.py` cases that
+  explicitly require Docker are skipped there and must be read as unproven by this run.
+
 ## Open change requests
 
 None.
@@ -753,3 +796,54 @@ The first run of this demo against the gunicorn stack failed at various points w
 operation. Both were real defects of the delivered image, not of the demo (per-worker signing
 keys, and `api/` missing from the image); they are written up as assumptions above and fixed in
 `backend/src/hub/settings/base.py` and `backend/Dockerfile`.
+
+### Slice 02 verification, 2026-10-27
+
+The slice's seven commands were run against locally built PostgreSQL 16.2 and Redis 7.2.5
+standing in for the testcontainers fixtures: this cloud runner has no reachable Docker socket,
+so `conftest.py`'s containers cannot start. The four `test_schema_in_postgres.py` cases that
+explicitly require Docker were skipped by their own guard, not by the harness, and are the one
+part of `make contracts` this run does not prove; everything else below is a real run.
+
+```
+$ ruff check                                  All checks passed!
+$ ruff format --check                         267 files already formatted
+$ mypy src                                    Success: no issues found in 213 source files
+$ lint-imports                                Contracts: 119 kept, 0 broken.
+$ check_django_config.py                      Django configuration checks passed
+
+==> cd backend && python -m pytest tests/unit/customers tests/integration/customers tests/integration/meters tests/architecture -q
+163 passed in 9.96s
+
+==> cd backend && python -m pytest tests/contract/test_registry_matrix.py -q
+24 passed in 4.03s
+
+==> cd backend && python -m pytest tests/integration/customers/test_directory.py -q
+4 passed in 1.00s
+
+==> cd backend && python -m pytest tests/integration/identity/test_fixtures.py -q
+6 passed in 4.00s
+
+==> cd backend && python -m pytest tests/unit/identity tests/integration/identity tests/integration/admin tests/contract -q
+252 passed in 30.50s
+
+==> python -m pytest tests/test_alignment.py tests/test_schema_in_postgres.py tests/test_traceability.py -q
+30 passed, 4 skipped in 1.31s     # the four need Docker
+
+==> python tools/check_traceability.py
+0 error(s), 0 warning(s)
+
+==> python -c "openapi_spec_validator.validate(...)"
+openapi.yaml is valid
+```
+
+Two deviations from the slice's literal list, both in the assumptions above: step 3 keeps the
+slice's own test selection but is run in this runner without `uv` (the project venv), and step 6
+runs `load_fixtures` first and imports as `support@example.test` instead of the unpublished
+`support.demo@soleilgrid.example`. Step 5 is guarded like slice 01's step 6 because the
+schemathesis harness belongs to track T4 and is not in this tree.
+
+The demo script (nine curl steps on `make up && make seed`) could not run here: it needs the
+compose stack, which needs Docker. Its data path is covered by
+`test_the_registry_demo_seed_is_readable_through_the_directory`, which loads the same seed and
+reads it back through the directory; the HTTP half is the demo's to prove on a Docker host.

@@ -13,8 +13,10 @@ generator are too. Tests that need a different clock or store call :func:`reset`
 from __future__ import annotations
 
 import threading
+from datetime import datetime
 from typing import Any
 from urllib.parse import urlsplit
+from uuid import UUID
 
 from django.conf import settings
 
@@ -38,7 +40,7 @@ from hub.identity.application.user_admin import (
     UserAdminService,
 )
 from hub.identity.application.webauthn import WebauthnService
-from hub.identity.contracts import AuditLog, Principal
+from hub.identity.contracts import AuditLog, CustomerLookup, Principal
 from hub.identity.infrastructure.approvals import ApprovalRepository
 from hub.identity.infrastructure.audit import HubAuditLog
 from hub.identity.infrastructure.crypto import hmac_phone
@@ -61,8 +63,10 @@ __all__ = [
     "approvals",
     "audit_log",
     "clock",
+    "customer_lookup",
     "customer_otp",
     "ids",
+    "last_customer_sign_in",
     "enrollment",
     "local_login",
     "mfa",
@@ -74,6 +78,7 @@ __all__ = [
     "store",
     "tokens",
     "unit_of_work",
+    "use_customer_lookup",
     "user_admin",
     "users",
     "webauthn",
@@ -106,6 +111,11 @@ _user_admin: UserAdminService | None = None
 _proof: ProofService | None = None
 _customer_otp: CustomerOtpService | None = None
 _notifier: LoggingNotifier | None = None
+# The customer lookup is a *registration*, like the denial recorder: `hub.customers` owns the
+# rows and contributes the adapter at start-up (identity may import customers' contracts, never
+# the reverse). ``reset`` keeps it — composition, not cache — and the fallback reads the table
+# identity already knows how to read, so identity still answers before a registration lands.
+_customer_lookup: CustomerLookup | None = None
 
 
 def reset() -> None:
@@ -441,6 +451,32 @@ def notifier() -> LoggingNotifier:
     return _notifier
 
 
+def use_customer_lookup(lookup: CustomerLookup | None) -> None:
+    """Install the customer lookup; ``hub.customers`` calls this at app start-up.
+
+    The service that holds it is dropped so a lookup installed after the service was built
+    still takes effect (the OTP tests build the service, then register).
+    """
+    global _customer_lookup, _customer_otp  # noqa: PLW0603
+    with _lock:
+        _customer_lookup = lookup
+        _customer_otp = None
+
+
+def customer_lookup() -> CustomerLookup:
+    """The registered lookup, or identity's own reader of ``hub.customers`` until one lands."""
+    return _customer_lookup if _customer_lookup is not None else CustomerDirectory()
+
+
+def last_customer_sign_in(customer_id: UUID) -> datetime | None:
+    """A customer's most recent completed sign-in, for the directory `customers` builds.
+
+    Exposed as a function rather than left to the caller because the session rows are this
+    module's; ``customers.wiring`` calls it, so the registry never reads ``refresh_tokens``.
+    """
+    return SessionRepository().last_sign_in_at(customer_id)
+
+
 def customer_otp() -> CustomerOtpService:
     """Customer sign-in by one-time code, with the three hourly ceilings."""
     global _customer_otp  # noqa: PLW0603
@@ -453,7 +489,7 @@ def customer_otp() -> CustomerOtpService:
                     store=store(),
                     proofs=proof(),
                     otp_store=OtpRepository(),
-                    customers=CustomerDirectory(),
+                    customers=customer_lookup(),
                     notifier=notifier(),
                     sessions=sessions(),
                     tokens=tokens(),

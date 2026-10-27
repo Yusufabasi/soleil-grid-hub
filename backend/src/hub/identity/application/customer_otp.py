@@ -34,7 +34,7 @@ from uuid import UUID
 from hub.identity.application.proof import ProofService
 from hub.identity.application.sessions import SessionService
 from hub.identity.application.tokens import AccessTokenService
-from hub.identity.contracts import Principal
+from hub.identity.contracts import CustomerLookup, CustomerRecord, Principal
 from hub.identity.domain.principal import Locale
 from hub.shared.contracts import KeyValueStore
 from hub.shared.errors import RateLimited, Unauthenticated, ValidationFailed
@@ -61,15 +61,6 @@ class OtpLimits:
     per_phone: int
     per_ip: int
     per_network: int
-
-
-@dataclass(frozen=True, slots=True)
-class CustomerRecord:
-    """The little a sign-in needs to know about a customer."""
-
-    id: UUID
-    locale: str
-    last_login_at: datetime | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,14 +101,6 @@ class OtpSignIn:
     access_token: str
     refresh_token: str
     refresh_expires_in: int
-
-
-class CustomerLookup(Protocol):
-    """Finds an active customer (slice 02 binds this to its own repository)."""
-
-    def find_active_by_phone(self, phone_e164: str) -> CustomerRecord | None: ...
-
-    def by_id(self, customer_id: UUID) -> CustomerRecord | None: ...
 
 
 class Notifier(Protocol):

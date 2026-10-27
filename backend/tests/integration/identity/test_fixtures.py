@@ -95,21 +95,20 @@ def test_two_administrators_and_one_active_customer() -> None:
 
 def test_running_twice_changes_nothing() -> None:
     call_command("load_fixtures", verbosity=0)
+    counts: dict[str, int] = {}
     with connection.cursor() as cursor:
-        cursor.execute("SELECT count(*) FROM hub.users")
-        users = cursor.fetchone()[0]
-        cursor.execute("SELECT count(*) FROM hub.user_roles")
-        grants = cursor.fetchone()[0]
+        for table in ("users", "user_roles", "customers", "meters", "plan_tariffs"):
+            cursor.execute(f"SELECT count(*) FROM hub.{table}")  # noqa: S608 - literal table names
+            counts[table] = int(cursor.fetchone()[0])
 
     call_command("load_fixtures", verbosity=0)
 
     with connection.cursor() as cursor:
-        cursor.execute("SELECT count(*) FROM hub.users")
-        assert cursor.fetchone()[0] == users
-        cursor.execute("SELECT count(*) FROM hub.user_roles")
-        assert cursor.fetchone()[0] == grants
-        cursor.execute("SELECT count(*) FROM hub.customers")
-        assert cursor.fetchone()[0] == 1
+        for table, before in counts.items():
+            cursor.execute(f"SELECT count(*) FROM hub.{table}")  # noqa: S608
+            assert cursor.fetchone()[0] == before, f"{table} changed on the second run"
+    # The registry demo (slice 02) rides along, so the counts are not one anymore; what this test
+    # pins is that the *second* run adds nothing, whatever the first one wrote.
 
 
 def test_target_names_are_guard_rails() -> None:
