@@ -1,0 +1,33 @@
+{
+  "name": "hub-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Soleil Grid Hub demo shell: the customer portal and the staff console (docs/plan/frontend/demo-shell-plan.md)",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "gen:api": "echo 'demo scope: no generated API client (docs/plan/frontend/demo-shell-plan.md section 4); src/lib/types.ts is hand-written'",
+    "gen:permissions": "echo 'demo scope: no generated permission map; src/lib/permissions.ts mirrors the routed operations the demo calls'"
+  },
+  "dependencies": {
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "next": "15.5.28"
+  },
+  "devDependencies": {
+    "typescript": "^5",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@tailwindcss/postcss": "^4",
+    "tailwindcss": "^4",
+    "eslint": "^9",
+    "eslint-config-next": "15.5.28",
+    "@eslint/eslintrc": "^3",
+    "vitest": "^3"
+  }
+}
