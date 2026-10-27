@@ -119,6 +119,14 @@ urlpatterns: list[Any] = [
     path("auth/logout", logout_view, name="logout"),
 ]
 
+# The dev token mint (docs/plan/frontend/demo-shell-plan.md section 3) exists only where a
+# throwaway database does. The guard is the setting, not a comment in the view: outside local and
+# test these paths are simply not in the URLconf, so there is nothing to authenticate against.
+if settings.HUB_ENV in ("local", "test"):
+    from hub.identity.api.dev_views import DevMintTokenView  # noqa: PLC0415
+
+    urlpatterns.append(path("dev/mint-token", DevMintTokenView.as_view(), name="devMintToken"))
+
 # The identity provider is not configured in every environment (Plan notes 1): the code ships,
 # the routes do not, until an issuer and a client exist for it.
 if settings.HUB_OIDC_ROUTES_ENABLED:
