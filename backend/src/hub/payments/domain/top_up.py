@@ -132,6 +132,22 @@ class TopUp:
             raise InvalidTopUpState(details={"from": self.status, "to": CANCELLED})
         return CancelOutcome(status=CANCELLED, changed=True)
 
+    def path_to(self, target: str) -> tuple[str, ...]:
+        """The statuses a write must pass through to reach ``target``.
+
+        Most transitions are one step. ``initiated`` has no edge to ``pending_unknown`` in
+        ``hub.top_ups_guard``, so an initiation whose provider answer never arrived walks
+        ``pending -> pending_unknown``: the same two-statement path a confirmation takes, and
+        the only one the trigger accepts. The search uses :data:`ALLOWED_TRANSITIONS`, so it
+        can never invent an edge the database refuses.
+        """
+        if can_transition(self.status, target):
+            return (target,)
+        for hop in ALLOWED_TRANSITIONS.get(self.status, frozenset()):
+            if can_transition(hop, target):
+                return (hop, target)
+        raise InvalidTopUpState(details={"from": self.status, "to": target})
+
     def with_status(self, status: str, *, late: bool | None = None) -> TopUp:
         """This top-up after a transition; the caller never mutates a frozen value."""
         return replace(self, status=status, late=self.late if late is None else late)

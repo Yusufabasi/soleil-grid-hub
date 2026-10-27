@@ -112,6 +112,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "invalid_state_transition": (
             "The resource cannot move to that state from its current one."
         ),
+        "payload_too_large": "The request body is larger than this route accepts.",
     },
     "fr": {
         "validation_error": "Le contenu de la requête n'a pas passé la validation.",
@@ -158,6 +159,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "invalid_state_transition": (
             "La ressource ne peut pas passer à cet état depuis son état actuel."
         ),
+        "payload_too_large": "Le corps de la requête dépasse ce que cette route accepte.",
     },
 }
 

@@ -36,6 +36,7 @@ __all__ = [
     "csv_importer",
     "ids",
     "meter_service",
+    "publish_ports",
     "register_csv_import",
     "registry",
     "registry_facts",
@@ -150,6 +151,22 @@ def registry() -> MeterRegistry:
     the same rows through the same code.
     """
     return MeterRegistryImpl(repository())
+
+
+# The name `payments` asks the kernel registry for: the two modules sit on the same layer of
+# the module DAG, so each may see the other's contracts but never its composition root.
+REGISTRY_PORT = "meters.registry"
+
+
+def publish_ports() -> None:
+    """Publish the meter registry by name, for a module that may not import this one.
+
+    ``ledger`` uses the same seam for `identity`'s services. The factory is a callable rather
+    than an instance, so a reset in a test cannot leave a consumer holding a stale adapter.
+    """
+    from hub.shared import registry as ports  # noqa: PLC0415 - avoids a cycle at import time
+
+    ports.provide(REGISTRY_PORT, registry)
 
 
 def unit_of_work(principal: Principal | None = None) -> UnitOfWork:

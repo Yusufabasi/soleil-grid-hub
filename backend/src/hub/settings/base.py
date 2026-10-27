@@ -116,6 +116,45 @@ HUB_APPROVAL_TTL_HOURS = env.int("HUB_APPROVAL_TTL_HOURS", default=72)
 # currency (slice 03 open item: the threshold by currency is finance's to tune).
 HUB_LEDGER_LOW_BALANCE_MINOR = env.int("HUB_LEDGER_LOW_BALANCE_MINOR", default=100)
 
+# --- payments: top-ups and the provider webhook (slice 04, docs/03 6.1) -------------------
+# How long a customer waits for the provider before the top-up expires, and the two ceilings
+# that stop one meter or one payer from minting collections: 10 per meter per 24 h is the
+# contract's number (docs/05 tier table), 5 per payer per hour is what one phone may spend.
+HUB_TOPUP_EXPIRY_MINUTES = env.int("HUB_TOPUP_EXPIRY_MINUTES", default=15)
+HUB_TOPUP_MAX_PER_METER_24H = env.int("HUB_TOPUP_MAX_PER_METER_24H", default=10)
+HUB_TOPUP_MAX_PER_PAYER_1H = env.int("HUB_TOPUP_MAX_PER_PAYER_1H", default=5)
+
+# The provider whose collections this deployable initiates (`synthetic` is the stub adapter).
+HUB_PAYMENTS_PROVIDER = env.str("HUB_PAYMENTS_PROVIDER", default="synthetic")
+# `{provider: base_url}` for the HTTP adapter. A provider with no base URL uses the in-memory
+# stub, which is what local and test runs want: nothing leaves the process.
+HUB_PROVIDER_BASE_URLS: dict[str, str] = env.json("HUB_PROVIDER_BASE_URLS", default={})
+
+# An amount at or above this floor is confirmed by pulling the provider's status API, not by
+# trusting the envelope alone (slice 04 open item: 100 USD, at an assumed 2,800 CDF per USD).
+HUB_PULL_VERIFY_THRESHOLD_MINOR = {
+    "USD": env.int("HUB_PULL_VERIFY_THRESHOLD_USD_MINOR", default=10_000),
+    "CDF": env.int("HUB_PULL_VERIFY_THRESHOLD_CDF_MINOR", default=28_000_000),
+}
+HUB_PULL_TIMEOUT_S = env.float("HUB_PULL_TIMEOUT_S", default=1.5)
+HUB_PROVIDER_INITIATE_TIMEOUT_S = env.float("HUB_PROVIDER_INITIATE_TIMEOUT_S", default=10.0)
+
+# The webhook body cap is checked from Content-Length before a byte is read (docs/03 6.1).
+HUB_WEBHOOK_MAX_BODY_BYTES = env.int("HUB_WEBHOOK_MAX_BODY_BYTES", default=65_536)
+HUB_WEBHOOK_TOLERANCE_SECONDS = env.int("HUB_WEBHOOK_TOLERANCE_SECONDS", default=300)
+
+# `{provider: [current, previous]}`: the previous secret is accepted during the 24 h rotation
+# overlap. A JSON object in one variable, because a provider's secret list is a data structure
+# and four environment variables per provider would invite a typo nobody notices until a
+# rotation silently rejects every delivery.
+HUB_PROVIDER_WEBHOOK_SECRETS: dict[str, list[str]] = env.json(
+    "HUB_PROVIDER_WEBHOOK_SECRETS",
+    default={"synthetic": ["dev-synthetic-webhook-secret"]},
+)
+
+# How long an initiation whose provider outcome is unknown waits before the poller looks again.
+HUB_PENDING_UNKNOWN_POLL_MINUTES = env.int("HUB_PENDING_UNKNOWN_POLL_MINUTES", default=30)
+
 # The refresh cookie is scoped to the auth routes only (D-17).
 HUB_REFRESH_COOKIE_NAME = "sg_refresh"
 HUB_REFRESH_COOKIE_PATH = "/api/v1/auth"

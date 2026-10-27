@@ -1,0 +1,12 @@
+{
+  "amount_out_of_range": "The amount is outside the plan's minimum and maximum.",
+  "topup_limit": "Too many top-ups for this meter in the last 24 hours; try again later.",
+  "invalid_top_up_state": "The top-up cannot move to that state from its current one.",
+  "meter_not_active": "The meter is not active, so it cannot receive a top-up.",
+  "invalid_signature": "The delivery signature does not verify.",
+  "stale_timestamp": "The delivery timestamp is outside the accepted window.",
+  "malformed_webhook": "The signed body is not a provider event envelope.",
+  "webhook_id_mismatch": "The webhook id header does not match the event in the body.",
+  "insufficient_scope": "The API key does not hold the scope this operation requires.",
+  "idempotency_key_required": "This operation requires an Idempotency-Key header."
+}

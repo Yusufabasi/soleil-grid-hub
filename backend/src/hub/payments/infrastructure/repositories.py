@@ -25,7 +25,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from django.db import connection
+from django.db import connection, transaction
 from psycopg.types.json import Jsonb
 
 from hub.payments.contracts import ProviderEventRow, TopUpRow
@@ -39,6 +39,9 @@ _TOP_UP_COLUMNS = (
     " tariff_minor_per_kwh, energy_wh, status, late, provider_event_id, ledger_transaction_id,"
     " reversal_transaction_id, initiated_at, expires_at, confirmed_at, updated_at"
 )
+
+# The same columns, qualified for the one statement that joins `hub.customers` (scope).
+_TOP_UP_COLUMNS_QUALIFIED = ", ".join(f"t.{name.strip()}" for name in _TOP_UP_COLUMNS.split(","))
 
 _EVENT_COLUMNS = (
     "id, provider, event_id, provider_txn_id, event_type, amount_minor, currency, payload,"
@@ -250,46 +253,70 @@ class TopUpRepository:
             )
             return [record[0] for record in cursor.fetchall()]
 
-    def page_for_customer(
-        self, customer_id: UUID, *, after_id: UUID | None, limit: int
-    ) -> list[TopUpRow]:
-        """One page of a customer's history, newest id first (keyset on the uuidv7)."""
-        clauses = ["customer_id = %s"]
-        params: list[Any] = [customer_id]
-        if after_id is not None:
-            clauses.append("id < %s")
-            params.append(after_id)
-        params.append(limit)
-        with connection.cursor() as cursor:
-            cursor.execute(
-                f"SELECT {_TOP_UP_COLUMNS} FROM hub.top_ups"  # noqa: S608 - literal columns
-                f" WHERE {' AND '.join(clauses)} ORDER BY id DESC LIMIT %s",
-                params,
-            )
-            return [_row(record) for record in cursor.fetchall()]
-
     def page(
         self,
         *,
-        customer_id: UUID | None,
-        after_id: UUID | None,
-        limit: int,
+        customer_id: UUID | None = None,
+        site_ids: Sequence[UUID] | None = None,
+        statuses: Sequence[str] = (),
+        meter_id: UUID | None = None,
+        provider: str | None = None,
+        provider_reference: str | None = None,
+        late: bool | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+        after_id: UUID | None = None,
+        limit: int = 25,
     ) -> list[TopUpRow]:
-        """One page, optionally for one customer: the staff list and the portal share it."""
+        """One keyset page, newest id first, with every filter applied in SQL.
+
+        Scope is filtered here rather than in the use case: a page that the caller may only
+        partly see would still leak how many rows exist through ``has_next``. ``site_ids=[]``
+        matches nothing, which is the safe reading of "no site is assigned to you"; ``None``
+        means unscoped, and only a caller that resolved ``all_sites`` passes it.
+
+        The join is on ``hub.customers`` because a top-up has no site of its own — the site is
+        a property of the account, and reading it here is cheaper than a second round trip.
+        """
         clauses: list[str] = []
         params: list[Any] = []
         if customer_id is not None:
-            clauses.append("customer_id = %s")
+            clauses.append("t.customer_id = %s")
             params.append(customer_id)
+        if site_ids is not None:
+            clauses.append("c.site_id = ANY(%s)")
+            params.append(list(site_ids))
+        if statuses:
+            clauses.append("t.status = ANY(%s)")
+            params.append(list(statuses))
+        if meter_id is not None:
+            clauses.append("t.meter_id = %s")
+            params.append(meter_id)
+        if provider is not None:
+            clauses.append("t.provider = %s")
+            params.append(provider)
+        if provider_reference is not None:
+            clauses.append("t.provider_ref = %s")
+            params.append(provider_reference)
+        if late is not None:
+            clauses.append("t.late = %s")
+            params.append(late)
+        if created_after is not None:
+            clauses.append("t.initiated_at >= %s")
+            params.append(created_after)
+        if created_before is not None:
+            clauses.append("t.initiated_at < %s")
+            params.append(created_before)
         if after_id is not None:
-            clauses.append("id < %s")
+            clauses.append("t.id < %s")
             params.append(after_id)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         params.append(limit)
         with connection.cursor() as cursor:
             cursor.execute(
-                f"SELECT {_TOP_UP_COLUMNS} FROM hub.top_ups{where}"  # noqa: S608 - literal
-                " ORDER BY id DESC LIMIT %s",
+                f"SELECT {_TOP_UP_COLUMNS_QUALIFIED}"  # noqa: S608 - literal column list
+                " FROM hub.top_ups t JOIN hub.customers c ON c.id = t.customer_id"
+                f"{where} ORDER BY t.id DESC LIMIT %s",
                 params,
             )
             return [_row(record) for record in cursor.fetchall()]
@@ -420,8 +447,15 @@ class ProviderEventRepository:
         signature_header: str | None,
         received_at: datetime,
     ) -> None:
-        """Log a rejected delivery: a hash and a length, never the body (FR-03)."""
-        with connection.cursor() as cursor:
+        """Log a rejected delivery: a hash and a length, never the body (FR-03).
+
+        The insert owns a savepoint. A rejected delivery is a fact worth recording, but a log
+        that refuses its entry must not take the caller's transaction with it: without the
+        savepoint a failed write leaves PostgreSQL in ``InFailedSqlTransaction`` and every
+        later statement in the same transaction fails for a reason that has nothing to do with
+        it.
+        """
+        with transaction.atomic(), connection.cursor() as cursor:
             cursor.execute(
                 "INSERT INTO hub.webhook_quarantine (id, provider, reason, source_ip,"
                 " body_sha256, body_length, signature_hdr, received_at)"

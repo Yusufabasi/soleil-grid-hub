@@ -24,6 +24,7 @@ __all__ = [
     "ProviderEvidence",
     "TopUpRow",
     "TopUpView",
+    "WebhookAck",
 ]
 
 
@@ -100,7 +101,19 @@ class TopUpView:
     reversal_transaction_id: UUID | None
 
     def document(self) -> dict[str, Any]:
-        """The JSON body of the contract, with the payer's number masked (FR-02)."""
+        """The JSON body of the contract, with the payer's number masked (FR-02).
+
+        Three fields are the contract's shape rather than the row's:
+
+        * ``created_at`` is ``initiated_at`` (the API never exposes a second creation time);
+        * ``energy_wh`` is the *credited* energy, so it stays null until the money arrived,
+          while ``quoted_energy_wh`` is the snapshot D-08 pins at initiation;
+        * ``fee`` is zero: v1 posts no provider fee line (slice 04 open item).
+
+        ``failure_code`` and ``token_id`` are properties of slices the provider flow and the
+        token saga own; until those exist the honest answer is null, not a guess.
+        """
+        credited = self.status in ("confirmed", "reversed")
         return {
             "id": str(self.id),
             "customer_id": str(self.customer_id),
@@ -108,15 +121,19 @@ class TopUpView:
             "provider": self.provider,
             "provider_reference": self.provider_reference,
             "amount": self.amount.document(),
+            "fee": {"amount_minor": 0, "currency": self.amount.currency},
             "status": self.status,
             "late": self.late,
+            "energy_wh": self.quoted_energy_wh if credited else None,
+            "failure_code": None,
+            "token_id": None,
             "quoted_tariff": {
                 "amount_minor": self.quoted_tariff_minor_per_kwh,
                 "currency": self.amount.currency,
             },
             "quoted_energy_wh": self.quoted_energy_wh,
             "payer_msisdn_masked": self.payer_msisdn_masked,
-            "fee": {"amount_minor": 0, "currency": self.amount.currency},
+            "created_at": _iso(self.initiated_at),
             "initiated_at": _iso(self.initiated_at),
             "expires_at": _iso(self.expires_at),
             "confirmed_at": _iso(self.confirmed_at) if self.confirmed_at is not None else None,
@@ -131,13 +148,19 @@ class TopUpView:
 
 @dataclass(frozen=True, slots=True)
 class InitiateTopUp:
-    """``TopUpCreate`` of the contract: the amount is the only money the caller chooses."""
+    """``TopUpCreate`` of the contract: the amount is the only money the caller chooses.
+
+    ``customer_id`` is the body field of the same name, and it is honoured only for a machine
+    principal: a customer's id comes from the token, so a portal request that names somebody
+    else is that somebody's id ignored rather than a second account's top-up (D-14).
+    """
 
     customer_id: UUID | None
     meter_id: UUID
     amount_minor: int
     currency: str
     payer_msisdn: str
+    provider: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,6 +185,17 @@ class ProviderEvidence:
     amount: Money | None
     payer_msisdn: str | None
     pulled_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class WebhookAck:
+    """``WebhookAck`` of the contract: the provider only needs to know if a retry helps."""
+
+    status: str
+    event_id: str
+
+    def document(self) -> dict[str, Any]:
+        return {"status": self.status, "event_id": self.event_id}
 
 
 class PaymentService(Protocol):

@@ -12,5 +12,6 @@ urlpatterns = [
     path("api/v1/", include("hub.customers.api.urls")),
     path("api/v1/", include("hub.meters.api.urls")),
     path("api/v1/", include("hub.ledger.api.urls")),
+    path("api/v1/", include("hub.payments.api.urls")),
     path("api/v1/", include("hub.admin.api.urls")),
 ]

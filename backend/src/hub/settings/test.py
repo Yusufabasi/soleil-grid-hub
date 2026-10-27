@@ -18,6 +18,14 @@ _TEST_DEFAULTS = {
     "HUB_DB_API_URL": "postgresql+psycopg://hub_api:dev@localhost:5432/hub_rw",
     "HUB_DB_API_REPLICA_URL": "postgresql+psycopg://hub_api:dev@localhost:5432/hub_ro",
     "HUB_TEST_DB_URL": "postgresql+psycopg://hub_api:dev@localhost:5432/hub_test",
+    # A real collection channel, so a suite can initiate a top-up on `mpesa_cd` and deliver
+    # its webhook on the same provider's route: the two names have to be the same provider,
+    # or the delivery can never find the top-up it pays for. The secret is the development
+    # stub's, because no real provider is reachable from a test.
+    "HUB_PROVIDER_WEBHOOK_SECRETS": (
+        '{"synthetic": ["dev-synthetic-webhook-secret"],'
+        ' "mpesa_cd": ["dev-synthetic-webhook-secret"]}'
+    ),
 }
 for _name, _value in _TEST_DEFAULTS.items():
     os.environ.setdefault(_name, _value)

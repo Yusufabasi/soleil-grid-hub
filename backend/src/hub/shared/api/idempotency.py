@@ -36,7 +36,15 @@ from rest_framework.response import Response
 from hub.shared.clock import current
 from hub.shared.errors import Conflict, InvalidRequest, ValidationFailed
 
-__all__ = ["IdempotentOutcome", "idempotent_response", "replay_or_run", "scope_for"]
+__all__ = [
+    "IdempotentOutcome",
+    "Reservation",
+    "complete",
+    "idempotent_response",
+    "replay_or_run",
+    "reserve",
+    "scope_for",
+]
 
 # One request's reservation is held for this long before another attempt may take it over.
 IN_PROGRESS_SECONDS = 30
@@ -50,6 +58,21 @@ class IdempotentOutcome:
     body: Mapping[str, Any]
     key: str | None
     replayed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class Reservation:
+    """A key this call owns until :func:`complete` stores the answer.
+
+    It exists because a handler with an *external* call cannot use :func:`replay_or_run`: that
+    one keeps a transaction open around the handler, and a ten-second provider call inside a
+    transaction holds a connection and its locks for ten seconds. Reserving first commits the
+    key on its own, so the provider call runs with no transaction open.
+    """
+
+    scope: str
+    key: str
+    now: datetime
 
 
 def scope_for(request: Request, route: str) -> str:
@@ -101,6 +124,46 @@ def replay_or_run(
         status, body = run()
         _complete(scope, key, status, body, now)
     return IdempotentOutcome(status=status, body=body, key=key)
+
+
+def _require_key(request: Request) -> str:
+    """The Idempotency-Key of an operation that mandates one; 400 otherwise."""
+    key = _key(request)
+    if key is None:
+        raise InvalidRequest(code="idempotency_key_required")
+    return key
+
+
+def reserve(
+    request: Request,
+    *,
+    scope: str,
+    subject_customer_id: UUID | None = None,
+) -> Reservation | IdempotentOutcome:
+    """Take the key in its own committed transaction, or answer a replay.
+
+    The returned :class:`Reservation` must be completed by the caller once the effect is
+    durable: until then the key is **in progress**, and an identical retry is a 409 rather
+    than a second attempt (docs/05 4). If the handler fails, the reservation stays until
+    ``locked_until`` and the key may be retried after it.
+    """
+    key = _require_key(request)
+    request_hash = _request_hash(getattr(request, "data", {}))
+    now = current()
+    with transaction.atomic():
+        replay = _reserve(scope, key, request_hash, now, subject_customer_id)
+        if replay is not None:
+            return replay
+    return Reservation(scope=scope, key=key, now=now)
+
+
+def complete(
+    reservation: Reservation, *, status: int, body: Mapping[str, Any]
+) -> IdempotentOutcome:
+    """Store the answer of a reserved key, so the next identical call is a replay."""
+    with transaction.atomic():
+        _complete(reservation.scope, reservation.key, status, body, reservation.now)
+    return IdempotentOutcome(status=status, body=body, key=reservation.key)
 
 
 def _reserve(

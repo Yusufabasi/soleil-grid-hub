@@ -5,6 +5,10 @@ functions written in ``db/schema.sql``. Python may only call them by name with p
 building the statement from a validated identifier is what keeps that boundary inspectable,
 and the SQLSTATE mapping (``23505`` -> ``Duplicate``, ``P0001`` -> ``Conflict``) arrives
 with slice 03, the first slice that calls a function which can fail that way.
+
+The retry policy lives in :mod:`hub.shared.retry` and is re-exported here so callers that
+already have this module keep working; that module is framework-free because the application
+layer needs the policy and may not import Django.
 """
 
 from __future__ import annotations
@@ -15,7 +19,22 @@ from typing import Any, cast
 
 from django.db import connections
 
-__all__ = ["call_function"]
+from hub.shared.retry import (
+    DEADLOCK_DETECTED,
+    SERIALIZATION_FAILURE,
+    TRANSIENT_SQLSTATES,
+    retry_transient,
+    sqlstate_of,
+)
+
+__all__ = [
+    "DEADLOCK_DETECTED",
+    "SERIALIZATION_FAILURE",
+    "TRANSIENT_SQLSTATES",
+    "call_function",
+    "retry_transient",
+    "sqlstate_of",
+]
 
 # A function name is a lowercase identifier: nothing else can reach an interpolated string.
 _FUNCTION_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")

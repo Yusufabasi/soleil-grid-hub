@@ -25,6 +25,7 @@ __all__ = [
     "InvalidCursor",
     "InvalidRequest",
     "InvariantViolation",
+    "PayloadTooLarge",
     "NotFound",
     "PermissionDenied",
     "RateLimited",
@@ -114,6 +115,18 @@ class InvalidCursor(DomainError):
     code = "invalid_cursor"
     message_key = "invalid_cursor"
     http_status = 400
+
+
+class PayloadTooLarge(DomainError):
+    """A body over the route's cap, refused before it is read: 413 ``payload_too_large``.
+
+    The cap is per route (a webhook's 64 KB, a telemetry batch's 256 KB), so the class carries
+    no number; the route that raises it names the limit in ``details``.
+    """
+
+    code = "payload_too_large"
+    message_key = "payload_too_large"
+    http_status = 413
 
 
 class NotFound(DomainError):

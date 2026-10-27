@@ -10,6 +10,7 @@ are parsed here and nowhere else.
 from __future__ import annotations
 
 import builtins
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -83,6 +84,18 @@ class _Env:
             value = self._raw.int(name, default)
         return value
 
+    def float(self, name: _Text, default: float | None = None) -> float:
+        """A fractional setting (a timeout in seconds); missing raises unless defaulted."""
+        raw = os.environ.get(name)
+        if raw is None or not raw.strip():
+            if default is None:
+                raise ImproperlyConfigured(f"Set the {name} environment variable")
+            return default
+        try:
+            return float(raw)
+        except ValueError as exc:
+            raise ValueError(f"Environment variable {name} is not a number: {raw!r}") from exc
+
     def bool(self, name: _Text, default: _Bool | None = None) -> _Bool:
         """Parse a boolean: ``true/1/yes/on`` are true, ``false/0/no/off`` (and the empty
         string) are false. A missing variable raises unless a default is given.
@@ -98,6 +111,21 @@ class _Env:
         if value in _FALSE_VALUES:
             return False
         raise ValueError(f"Environment variable {name} is not a boolean: {raw!r}")
+
+    def json(self, name: _Text, default: Any = None) -> Any:
+        """A JSON-valued variable (a map of provider secrets, of base URLs).
+
+        A value that does not parse raises at import rather than reaching a caller as a
+        string that happens to look like JSON: a secret map read as one key called
+        ``{"mpesa_cd":`` would reject every delivery with a confusing 401.
+        """
+        raw = os.environ.get(name)
+        if raw is None or not raw.strip():
+            return default
+        try:
+            return json.loads(raw)
+        except ValueError as exc:
+            raise ImproperlyConfigured(f"Environment variable {name} is not valid JSON") from exc
 
     def secret(self, name: _Text, default: _Text | None = None) -> Secret:
         return Secret(self.str(name, default))

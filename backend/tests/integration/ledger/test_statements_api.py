@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 from unittest import mock
 
@@ -32,7 +33,9 @@ from support.principals import SeededUser, seed_staff_user
 
 pytestmark = [pytest.mark.integration, pytest.mark.django_db]
 
-REPO_ROOT = "/workspace/chats/0f41d2d4e20cd43c7c6ad9b2"
+# The repository root, found from this file rather than assumed: the contract lives outside the
+# backend package, and a hard-coded checkout path would only pass on the machine that wrote it.
+REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
 def _fold(account_id: uuid.UUID) -> int:

@@ -159,12 +159,19 @@ def test_other_methods_are_refused_as_problem(urlconf: str) -> None:
     assert response.json()["code"] == "method_not_allowed"
 
 
+# The webhooks pool has exactly one job besides liveness: take a signed provider delivery
+# (slice 04, FR-03). Every other non-api pool serves health and nothing else.
+WEBHOOK_PATHS = {"/api/v1/webhooks/providers/<str:provider>"}
+
+
 @pytest.mark.tc("TC-NFR-06-7")
 def test_health_is_the_only_route_outside_the_api_pool(urlconf: str) -> None:
     routes = _flatten(get_resolver().url_patterns)
 
     assert HEALTH_PATHS <= routes
-    if urlconf != "hub.urls.api":
+    if urlconf == "hub.urls.webhooks":
+        assert routes == HEALTH_PATHS | WEBHOOK_PATHS
+    elif urlconf != "hub.urls.api":
         # Ingest, telemetry and stream serve health and nothing else; a stray route on a pool
         # that never advertises it is how an endpoint escapes the contract (D-38).
         assert routes == HEALTH_PATHS
