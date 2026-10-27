@@ -20,6 +20,12 @@ class IdentityConfig(AppConfig):
         nothing. `ROOT_URLCONF` names the deployment precisely: the permission class is only
         reachable through `hub.urls.api`.
         """
+        from hub.identity import wiring  # noqa: PLC0415
+
+        # Published on every deployable: `ledger` needs these in the worker and the scheduler
+        # too, not only behind the API (hub.shared.registry, CR-002).
+        wiring.publish_ports()
+
         if getattr(settings, "ROOT_URLCONF", "") != "hub.urls.api":
             return
         from hub.identity.infrastructure.audit import record_access_denied  # noqa: PLC0415

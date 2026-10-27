@@ -15,9 +15,10 @@ Two things this file adds beyond `test_auth_matrix.py`, which sweeps the whole s
   foreign id must answer **404**, never 403 — the status must not tell an outsider that the row
   exists (D-14). The contract marks the operations this applies to with `x-site-scoped`.
 
-Operations declared for slices that are not built yet (`getCustomerWallet`, `listMeterReadings`,
-`listMeterTokens`) have no route here, so they are skipped rather than asserted to be 404: a
-404 proves nothing about authorization. Integrator and gateway keys are issued from slice 15;
+Operations declared for slices that are not built yet (`listMeterReadings`, `listMeterTokens`)
+have no route here, so they are skipped rather than asserted to be 404: a 404 proves nothing
+about authorization. Slice 03 mounts `getCustomerWallet` under `/customers`, so from then on it
+is part of the matrix like any other registry operation. Integrator and gateway keys are issued from slice 15;
 until then their cells are pinned as *refused* for every credential this build can present.
 """
 
@@ -105,6 +106,7 @@ OPERATIONS = registry_operations()
 SITE_SCOPED_IDS = frozenset(
     {
         "getCustomer",
+        "getCustomerWallet",
         "updateCustomer",
         "closeCustomer",
         "listCustomerMeters",

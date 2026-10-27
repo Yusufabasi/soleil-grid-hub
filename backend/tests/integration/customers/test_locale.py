@@ -58,7 +58,15 @@ REGISTRY_CODES = (
 
 
 @pytest.fixture(autouse=True)
-def frozen() -> Any:
+def frozen(redis_store) -> Any:  # noqa: ANN001 - the fixture's job is the store
+    """A frozen clock, installed after the session store is ready.
+
+    ``redis_store`` resets `identity`'s wiring, which drops whatever clock was installed
+    before it. Depending on it here makes that reset happen first, so the clock this suite
+    froze is the one the use cases read; the other order stamps approvals with the wall
+    clock while the assertions move a frozen one.
+    """
+
     clock = FrozenClock(NOW)
     identity_wiring.use_clock(clock)
     customers_wiring.reset()

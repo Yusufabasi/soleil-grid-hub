@@ -300,6 +300,11 @@ def to_problem(
     }
     if errors is not None:
         body["errors"] = errors
+    # A refused period lock names the open items it found, so the maker knows what to clear
+    # before proposing again. It is the same field `AccountingPeriod` carries.
+    open_exceptions = exc.details.get("open_exceptions") if isinstance(exc, DomainError) else None
+    if isinstance(open_exceptions, int):
+        body["open_exceptions"] = open_exceptions
     step_up = exc.details.get("step_up") if isinstance(exc, DomainError) else None
     if isinstance(step_up, dict):
         # docs/05: a step-up refusal says how old the authentication may be, so the client can

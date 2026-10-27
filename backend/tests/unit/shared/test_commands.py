@@ -13,11 +13,15 @@ import io
 import json
 import logging
 import threading
+from collections.abc import Iterator
 from contextlib import redirect_stdout
 from importlib import import_module
 
 import pytest
 from django.core.management import call_command
+
+from hub.shared import jobs
+from hub.shared.jobs import get_registry
 
 COMMANDS = ["run_worker", "run_relay", "run_scheduler"]
 
@@ -33,11 +37,25 @@ def _restore_logging() -> object:
     root.setLevel(level)
 
 
+@pytest.fixture
+def a_registered_job() -> Iterator[str]:
+    """A cron job that does nothing, so ``run_scheduler --once`` needs no database.
+
+    The real jobs are the ledger's three, and running them here would make a unit test of the
+    command's shape depend on Postgres and on the ledger slice.
+    """
+    name = "test.noop"
+    get_registry().register_cron(name=name, cron="0 0 * * *", handler=lambda ctx: 0)
+    yield name
+    jobs.reset()
+
+
 @pytest.mark.parametrize("name", COMMANDS)
-def test_once_logs_loop_started_and_returns_zero(name: str) -> None:
+def test_once_logs_loop_started_and_returns_zero(name: str, a_registered_job: str) -> None:
     buffer = io.StringIO()
+    arguments = [a_registered_job] if name == "run_scheduler" else []
     with redirect_stdout(buffer):
-        result = call_command(name, "--once")
+        result = call_command(name, "--once", *arguments)
 
     assert result is None  # handle() returned normally: the process exits 0
     lines = [json.loads(line) for line in buffer.getvalue().splitlines() if line.strip()]

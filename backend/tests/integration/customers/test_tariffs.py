@@ -44,8 +44,13 @@ DECEMBER = datetime(2026, 12, 1, 0, 0, tzinfo=UTC)
 
 
 @pytest.fixture(autouse=True)
-def frozen() -> Any:
-    """A frozen clock through the kernel seam, and a fresh customers wiring to match.
+def frozen(redis_store) -> Any:  # noqa: ANN001 - the fixture's job is the store
+    """A frozen clock, installed after the session store is ready.
+
+    ``redis_store`` resets `identity`'s wiring, which drops whatever clock was installed
+    before it. Depending on it here makes that reset happen first, so the clock this suite
+    froze is the one the use cases read; the other order stamps approvals with the wall
+    clock while the assertions move a frozen one.
 
     ``customers_wiring.reset`` also re-registers the ``tariff.change`` executor: the identity
     registry is rebuilt from scratch on reset, and an approval kind nobody can execute would

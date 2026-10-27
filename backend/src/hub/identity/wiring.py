@@ -49,6 +49,7 @@ from hub.identity.infrastructure.notifications import LoggingNotifier
 from hub.identity.infrastructure.repositories import SessionRepository, UserRepository
 from hub.identity.infrastructure.user_admin import UserAdminRepository
 from hub.shared import clock as kernel_clock
+from hub.shared import registry
 from hub.shared.clock import SystemClock
 from hub.shared.contracts import KeyValueStore
 from hub.shared.ids import Uuid7Generator
@@ -72,6 +73,7 @@ __all__ = [
     "mfa",
     "oidc",
     "proof",
+    "publish_ports",
     "reset",
     "sessions",
     "step_up",
@@ -519,6 +521,20 @@ def user_admin() -> UserAdminService:
                     audit=audit_log(),
                 )
     return _user_admin
+
+
+def publish_ports() -> None:
+    """Publish the services a lower module may not import (hub.shared.registry, CR-002).
+
+    ``ledger`` sits below this module in the dependency order, and the import contract lets it
+    see ``identity.contracts`` and ``identity.events`` only. The four callables below are what
+    it needs, published under names rather than reached through an import. Factories, not
+    instances: whichever ``ready()`` runs first, the consumer resolves the current object.
+    """
+    registry.provide("identity.approvals", approvals)
+    registry.provide("identity.audit", audit_log)
+    registry.provide("identity.unit_of_work", unit_of_work)
+    registry.provide("identity.register_approval_executor", add_approval_executor)
 
 
 def approvals() -> ApprovalService:

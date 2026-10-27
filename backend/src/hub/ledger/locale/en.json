@@ -1,0 +1,12 @@
+{
+  "approval_required": "A manual ledger posting needs an approved approval bound to these lines.",
+  "currency_mismatch": "All lines of a posting must be in one currency, and match the wallet's.",
+  "evidence_required": "A reversal needs a stored provider event or an approved refund.",
+  "insufficient_wallet_balance": "The wallet does not hold enough for this debit; top it up first.",
+  "open_exceptions_remain": "The period still has open reconciliation exceptions; resolve them first.",
+  "period_already_locked": "The accounting period is already locked.",
+  "period_locked": "The effective date falls in a locked accounting period; post a reversal in an open one.",
+  "period_not_locked": "The accounting period is not locked, so there is nothing to reopen.",
+  "unbalanced_posting": "The posting's debits and credits do not balance.",
+  "unknown_ledger_account": "The ledger account this posting names does not exist."
+}

@@ -68,6 +68,10 @@ KIND_TO_ACTION: dict[str, str] = {
     "erasure": "erasure.approve",
     "data_export": "data.export",
     "kb_publish": "kb.publish",
+    # D-40: locking and reopening a month is a maker-checker decision. The actions are added
+    # by db/migrations/0002_approvals_period_actions.sql, which widens ck_approvals_action.
+    "period_lock": "period.lock",
+    "period_reopen": "period.reopen",
 }
 ACTION_TO_KIND: dict[str, str] = {action: kind for kind, action in KIND_TO_ACTION.items()}
 
@@ -104,7 +108,7 @@ class Executor(Protocol):
 
     def execute(
         self,
-        payload: Mapping[str, Any],
+        payload: Any,
         principal: Principal,
         uow: UnitOfWork,
         *,
@@ -120,6 +124,23 @@ class RegisteredExecutor:
     required_permission: str
     required_attribute: str | None
     execute: Callable[..., Mapping[str, Any] | None]
+
+    def __call__(
+        self,
+        payload: Any,
+        principal: Principal,
+        uow: UnitOfWork,
+        *,
+        approval_id: UUID,
+    ) -> Mapping[str, Any] | None:
+        """Run the registered executor, whichever of the two shapes it has.
+
+        `identity` registers plain callables (``CreateUserExecutor`` defines ``__call__``);
+        the ledger's executors carry an ``execute`` method, the name docs/03 gives the
+        protocol. Accepting both here beats asking either module to imitate the other.
+        """
+        target = getattr(self.execute, "execute", self.execute)
+        return target(payload, principal, uow, approval_id=approval_id)
 
     def may_propose(self, principal: Principal) -> bool:
         """Proposing needs the permission; the attribute gates deciding, not asking."""
@@ -177,7 +198,9 @@ class Approval:
     status: str
     subject_type: str
     subject_id: UUID | None
-    payload: Mapping[str, Any]
+    # Usually an object; the ledger's adjustment approval is the bare lines array, because
+    # `hub.post_ledger_transaction` compares the posted lines' hash with the stored one.
+    payload: Any
     payload_hash: str
     maker_id: UUID
     approver_id: UUID | None
@@ -196,7 +219,9 @@ class Approval:
             "status": self.status,
             "subject_type": self.subject_type,
             "subject_id": str(self.subject_id) if self.subject_id is not None else None,
-            "payload": dict(self.payload),
+            "payload": dict(self.payload)
+            if isinstance(self.payload, Mapping)
+            else list(self.payload),
             "payload_hash": self.payload_hash,
             "maker_id": str(self.maker_id),
             "approver_id": str(self.approver_id) if self.approver_id is not None else None,
@@ -245,17 +270,23 @@ class ApprovalService:
         principal: Principal,
         *,
         kind: str,
-        payload: Mapping[str, Any],
+        payload: Mapping[str, Any] | Sequence[Any],
         reason: str,
         subject_id: UUID | None = None,
         ip: str | None = None,
     ) -> Approval:
-        """Store the proposal; nothing happens until somebody else approves it."""
+        """Store the proposal; nothing happens until somebody else approves it.
+
+        ``payload`` is normally the object the executor reads, and must carry the reason; the
+        ledger's ``ledger.adjustment`` is the exception the schema forces — its payload is the
+        lines array itself, so the hash the posting function checks is the hash that was
+        approved (Task 03.5).
+        """
         executor = self._registry.get(kind)
         if executor is None or not executor.may_propose(principal):
             # The caller either may not propose this kind, or this build cannot execute it yet.
             raise PermissionDenied(code="forbidden")
-        if payload.get("reason") is None:
+        if isinstance(payload, Mapping) and payload.get("reason") is None:
             raise ValidationFailed(
                 details={
                     "errors": [
@@ -277,7 +308,7 @@ class ApprovalService:
                 subject_customer_id=subject_id,
                 maker_user_id=principal.subject_id,
                 maker_session_id=self._session_of(principal),
-                payload=dict(payload),
+                payload=dict(payload) if isinstance(payload, Mapping) else list(payload),
                 expires_at=now + self._ttl,
                 created_at=now,
             )
@@ -360,7 +391,7 @@ class ApprovalService:
                 approver_session_id=self._session_of(principal),
                 decided_at=decided_at,
             )
-            result = executor.execute(row["payload"], principal, uow, approval_id=approval_id)
+            result = executor(row["payload"], principal, uow, approval_id=approval_id)
             self._repository.mark_consumed(approval_id, at=decided_at)
             executed = self._repository.get(approval_id)
             if executed is None:  # pragma: no cover - locked in this transaction
@@ -474,7 +505,7 @@ class ApprovalService:
             payload_hash=str(row["payload_hash"]),
             maker_id=row["maker_user_id"],
             approver_id=row["approver_user_id"],
-            reason=str(payload.get("reason") or ""),
+            reason=str(payload.get("reason") or "") if isinstance(payload, Mapping) else "",
             decision_note=None,
             created_at=row["created_at"],
             decided_at=row["decided_at"],
@@ -516,12 +547,18 @@ class ApprovalService:
         )
 
 
-def _payload(value: Any) -> dict[str, Any]:
-    """A jsonb column arrives as text through this driver; a dict passes through."""
+def _payload(value: Any) -> Any:
+    """A jsonb column arrives as text through this driver; a parsed value passes through.
+
+    An object is the normal shape and a list the ledger's adjustment payload; anything else is
+    not a payload this service wrote, so it is refused rather than half-displayed.
+    """
     if isinstance(value, Mapping):
         return dict(value)
+    if isinstance(value, list):
+        return list(value)
     parsed = json.loads(str(value))
-    if not isinstance(parsed, dict):
+    if not isinstance(parsed, (dict, list)):
         raise ValidationFailed()
     return parsed
 

@@ -244,7 +244,24 @@ forbidden_modules =
 
 
 def public_surface_contract(source: str, target: str) -> str:
-    """One forbidden contract for a cell of the matrix that is not allowed."""
+    """One forbidden contract for a cell of the matrix that is not allowed.
+
+    A module's own ``contracts`` and ``events`` are its public surface, and the matrix is
+    written in terms of them: every module may import another's. Those modules necessarily
+    name their own internals (``identity.contracts`` holds the ``Principal`` the domain
+    defines), so the edges below are ignored. Without them the contract forbids the very
+    vocabulary it is named after, and a module that follows the rule fails it.
+    """
+    surfaces = ("contracts", "events")
+    inner = ("api", "application", "domain", "infrastructure", "models")
+    # The package itself and everything under it: `identity.contracts` names
+    # `identity.domain.principal`, and the bare module name does not match that edge.
+    ignores = "\n".join(
+        f"    hub.{target}.{surface} -> hub.{target}.{layer}{suffix}"
+        for surface in surfaces
+        for layer in inner
+        for suffix in ("", ".**")
+    )
     return f"""
 [importlinter:contract:public-surface-{source}-{target}]
 name = {source} sees only {target} contracts and events
@@ -258,6 +275,9 @@ forbidden_modules =
     hub.{target}.infrastructure
     hub.{target}.models
 allow_indirect_imports = False
+ignore_imports =
+{ignores}
+unmatched_ignore_imports_alerting = warn
 """
 
 

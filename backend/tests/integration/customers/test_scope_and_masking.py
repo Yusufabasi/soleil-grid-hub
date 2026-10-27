@@ -42,7 +42,15 @@ PSEUDONYMOUS_KEYS = {"id", "pseudonym", "site_id", "plan_id", "status", "created
 
 
 @pytest.fixture(autouse=True)
-def frozen() -> Any:
+def frozen(redis_store) -> Any:  # noqa: ANN001 - the fixture's job is the store
+    """A frozen clock, installed after the session store is ready.
+
+    ``redis_store`` resets `identity`'s wiring, which drops whatever clock was installed
+    before it. Depending on it here makes that reset happen first, so the clock this suite
+    froze is the one the use cases read; the other order stamps approvals with the wall
+    clock while the assertions move a frozen one.
+    """
+
     clock = FrozenClock(NOW)
     identity_wiring.use_clock(clock)
     customers_wiring.reset()
@@ -83,9 +91,13 @@ class Fixture:
                 (self.customer_a, self.site_a, "Amani Mbuyi"),
                 (self.customer_b, self.site_b, "Bintu Kasongo"),
             ):
+                # `created_at` is written from the frozen clock, not from the database's
+                # `now()`: the creation-window filter is judged against that clock, and a row
+                # stamped with the wall clock would be "in the future" on any later day.
                 cursor.execute(
                     "INSERT INTO hub.customers (id, site_id, plan_id, full_name, phone_e164, "
-                    "email, language, status) VALUES (%s, %s, %s, %s, %s, %s, 'fr', 'active')",
+                    "email, language, status, created_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, 'fr', 'active', %s)",
                     [
                         customer_id,
                         site_id,
@@ -93,6 +105,7 @@ class Fixture:
                         name,
                         PHONE if customer_id == self.customer_a else "+243810000043",
                         f"{customer_id.hex[:8]}@example.test",
+                        NOW,
                     ],
                 )
         return self

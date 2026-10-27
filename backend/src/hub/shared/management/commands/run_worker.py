@@ -48,6 +48,9 @@ class LoopCommand(BaseCommand):
         """Ask the loop to finish its iteration and return (the SIGTERM handler does this)."""
         self._stop.set()
 
+    def run_once(self) -> None:
+        """Do the command's one-shot work. A worker consumes a queue, so it has none."""
+
     def handle(self, *args: Any, **options: Any) -> None:
         configure_logging(service=self.service)
         start_metrics_server()
@@ -56,9 +59,13 @@ class LoopCommand(BaseCommand):
         logger.info("loop.started", extra={"service": self.service, "once": once})
         self.started.set()
         try:
+            if once:
+                # One shot: the thing a CronJob runs. The base command has nothing to do;
+                # `run_scheduler` overrides this to execute its registered jobs. It returns
+                # rather than looping, so the process exits 0.
+                self.run_once()
+                return
             while not self._stop.is_set():
-                if once:
-                    break
                 self._stop.wait(POLL_INTERVAL_SECONDS)
         finally:
             restore()

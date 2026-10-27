@@ -80,6 +80,23 @@ case "${SLICE}" in
       "cd backend && python -m pytest tests -k 'slice01 or identity' -q"
     )
     ;;
+  03)
+    commands=(
+      "make lint"
+      "make contracts"
+      "cd backend && python -m pytest tests/unit/ledger tests/architecture/test_ledger_models.py tests/architecture/test_ledger_leaf.py -q"
+      # Twice, as the slice asks: the concurrency cases are the ones that flake.
+      "cd backend && python -m pytest tests/integration/ledger -q"
+      "cd backend && python -m pytest tests/integration/ledger -q"
+      # Step 6 selects by traceability id. The marker is `tc(<id>)`, whose argument pytest
+      # cannot filter on, so the whole tagged set runs instead of the FR_04/NFR_05 subset and
+      # `tools/check_traceability.py` (inside `make contracts`) owns the id-to-requirement map.
+      "cd backend && python -m pytest tests -q -m tc --strict-markers"
+      # Step 5 loads db/invariant_tests.sql into a live database, which needs psql and a DSN;
+      # the guard says so out loud rather than skipping silently.
+      'if command -v psql >/dev/null 2>&1 && [ -n "${HUB_TEST_DB_URL:-}" ]; then psql "${HUB_TEST_DB_URL}" -v ON_ERROR_STOP=1 -f db/invariant_tests.sql; else echo "psql or HUB_TEST_DB_URL is not set: db/invariant_tests.sql not run here (see docs/plan/progress.md)"; fi'
+    )
+    ;;
   *)
     echo "unknown slice '${SLICE}': add its commands to tools/scripts/verify_slice.sh" >&2
     exit 2

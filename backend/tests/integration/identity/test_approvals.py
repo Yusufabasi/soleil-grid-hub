@@ -373,7 +373,8 @@ def test_proposing_a_kind_this_caller_may_not_propose_is_refused(
     support = seed_local_user("support_agent")
 
     # A contract kind whose database action arrives with a later slice: the body is not accepted.
-    unmapped = propose(client, token_for(admin, clock), kind="period_lock")
+    # (`period_lock` left this group in slice 03: `period.lock` is now in ck_approvals_action.)
+    unmapped = propose(client, token_for(admin, clock), kind="draft_co_approval")
     assert unmapped.status_code == 422
 
     # A kind this build can execute, proposed by somebody without the permission it needs.

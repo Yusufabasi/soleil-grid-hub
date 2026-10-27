@@ -1,8 +1,8 @@
 # Progress: Soleil Grid Hub build
 
 Executor: implementing agent. Guide: `docs/plan/00-executor-guide.md`. Slices complete: **00**
-(`docs/plan/slice-00-walking-skeleton.md`) and **01**
-(`docs/plan/slice-01-identity-rbac-approvals.md`). Update this file after every task (status, commit,
+(`docs/plan/slice-00-walking-skeleton.md`), **01** (`docs/plan/slice-01-identity-rbac-approvals.md`),
+**02** (`docs/plan/slice-02-registry.md`) and **03** (`docs/plan/slice-03-ledger-core.md`). Update this file after every task (status, commit,
 test command and its summary line) and paste the full `make verify SLICE=00` output at the end
 of the slice.
 
@@ -73,6 +73,19 @@ the per-worker signing key and the missing `api/` in the image, which single-pro
 | 02.7 | Localised registry errors and bilingual strings | done | this commit | `cd backend && python -m pytest tests/integration/customers/test_locale.py -q` -> `5 passed` (a support agent whose account says `fr` creates a duplicate number and reads the French `duplicate_phone` sentence with `code` unchanged at `duplicate_resource`, while the same request as an `en` account answers the English sentence — no `Accept-Language` header in either; a French caller reading a missing customer gets the French 404 sentence even when the browser sends `en-GB`, so the stored language wins; with no stored language `fr-CA` answers French and `es-ES` answers English, both 401 `unauthenticated`; all twelve registry message keys have an `en` and an `fr` entry that are non-empty and textually different; each module's JSON reaches the handler verbatim, and an uncatalogued key still answers the generic sentence in the caller's language); `pytest -q` -> `452 passed`; `mypy src` -> 209 files clean; `ruff check`/`ruff format --check` clean; `lint-imports` -> `119 kept, 0 broken`
 | 02.8 | All-or-nothing CSV import for customers and meters | done | this commit | `cd backend && python -m pytest tests/integration/customers/test_csv_import.py -q` -> `11 passed` (`customers_one_bad_row.csv` exits 2 with `errors: [{row: 3, code: duplicate_phone}]` and writes no row, then the fixed file inserts 2 and a rerun inserts 0 with `skipped_existing: 2`; a `=cmd()` name is stored as `'=cmd()` and row 2 is listed under `neutralised`; `HUB_IMPORT_MAX_ROWS = 1` and `HUB_IMPORT_MAX_BYTES = 32` each exit 2 with no insert; an unknown `site_code` is `unknown_site` at row 2; two rows claiming one serial exit 2 with `serial_conflict` at row 3 and no meter inserted; the meters file links `EXT-001` to `SN-0001` and leaves `SN-0002` unassigned; a dry run reports `would_insert: 2` and writes neither a customer nor an audit row; the run leaves exactly one `registry.import.completed` row whose details are the counts plus `outcome`, with no name or number; a Latin-1 file exits 2 while a BOM-prefixed one imports; an `operations_engineer` running the customers import and an unknown address both exit 3 with nothing written); `pytest tests/integration/customers tests/integration/meters tests/architecture tests/unit/customers -q` -> `158 passed`; `pytest -q` -> `463 passed`; `mypy` -> 262 files clean; `ruff check`/`ruff format --check` clean; `lint-imports` -> `119 kept, 0 broken`
 | 02.9 | Registry authorization matrix, directory and demo seed | done | this commit | `cd backend && python -m pytest tests/contract/test_registry_matrix.py tests/integration/customers/test_directory.py -q` -> `28 passed` (all 21 routed operations tagged Customers or Meters called with a real EdDSA token per staff role and with a real portal token: allowed cells never 401/403 and every other cell does; the nine `x-site-scoped` registry operations answer 404 — never 403 — for a foreign-site id and the lists omit it, while the same caller reads its own site; a denied registry read writes `authz.denied`; the directory quotes 1 minor at 1,000/kWh as exactly 1 Wh, keeps the older version in force before the newer `effective_from`, floors 1001 minor at 1,250/kWh to 800 Wh without rounding up and refuses an instant with no version in force; `current_plan` carries the version in force; the meter link answers both directions and returns `None` for an unassigned meter or a meterless customer; the same object is identity's `CustomerLookup`, so a suspended customer is invisible and `last_login_at` reads identity's sessions; `load_fixtures` seeds the new `db/seed/registry_demo.json` — two sites, two plans with an active tariff and its approval each, six customers, six meters (one unassigned) and one conflict-of-interest link — idempotently, and the directory reads the seeded EXT-001 back at 1,200); `pytest tests/unit/customers tests/integration/customers tests/integration/meters tests/architecture -q` -> `163 passed`; `pytest tests/unit/identity tests/integration/identity tests/integration/admin tests/contract -q` -> `252 passed`; `tests/integration/identity/test_fixtures.py` -> `6 passed`; root contract tests -> `30 passed, 4 skipped` (the four need Docker, absent in this runner); `mypy src` -> 213 files clean; `ruff check`/`ruff format --check` clean; `lint-imports` -> `119 kept, 0 broken`
+
+## Task log — slice 03
+
+| Task | Scope | Status | Commit | Test command and result |
+|---|---|---|---|---|
+| 03.1 | Posting domain rules and the unmanaged models | done | this commit | `cd backend && python -m pytest tests/unit/ledger/test_posting_domain.py tests/architecture/test_ledger_models.py -q` -> `12 passed` (a debit converts to a positive minor amount and a credit to a negative one; one minor unit of drift raises `UnbalancedPosting`; a USD line against a CDF line raises `CurrencyMismatch` with 422; a float amount and a `bool` are `TypeError` while `2**63` is `ValueError`; a single-line request is refused and a zero line cannot balance; every ledger model is `managed = False` with its `db_table` unqualified, and each one's columns match `db/schema.sql` in both directions) |
+| 03.2 | Writer, grants and database defences | done | this commit | `cd backend && python -m pytest tests/integration/ledger/test_db_defences.py tests/integration/ledger/test_post_function.py -q` -> `11 passed` (as `hub_api`, INSERT/UPDATE/DELETE on `ledger_entries`, `ledger_transactions` and `ledger_accounts`, and UPDATE on `wallet_balances`, are each `InsufficientPrivilege`; an unbalanced commit, an entry appended to a committed transaction, a rewritten line, and UPDATE/DELETE/TRUNCATE from the owner session are all refused; the eight definer functions carry `search_path=pg_catalog, hub, pg_temp` and belong to `ledger_owner`, and their nine triggers are `ENABLE ALWAYS`; the same `posting_key` twice yields one row and `replayed=True`; the fourteen system accounts exist per currency and a posting that touches only system accounts creates no `wallet_balances` row) |
+| 03.3 | LedgerService, system accounts and wallet concurrency | done | this commit | `cd backend && python -m pytest tests/integration/ledger/test_concurrency.py -q` -> `3 passed` (100 threads each debit 100 from a 10,000 wallet: the balance ends at 0, a 101st debit raises `InsufficientWalletBalance`, and no thread sees `DeadlockDetected`; 20 threads sharing one `posting_key` produce exactly one `replayed=False`, nineteen `True` and one credit; two postings that touch two wallets in opposite order do not deadlock) |
+| 03.4 | Reversals and `chargeback_receivable` | done | this commit | `cd backend && python -m pytest tests/integration/ledger/test_reversal.py -q` -> `5 passed` (a full reversal returns every account to zero and leaves both transactions; a wallet that already spent 300 of a 1,000 credit returns 700, posts 300 to `chargeback_receivable` and stages `ledger.chargeback_opened` with `shortfall_minor: 300` against the original transaction; the second call with the same key is a replay with exactly one reversal row; neither a provider event nor an approval is 422 `evidence_required`; an `energy_purchase` is not a credit that can go back) |
+| 03.5 | Adjustment and refund through approvals | done | this commit | `cd backend && python -m pytest tests/integration/ledger/test_adjustment_flow.py -q` -> `7 passed` (a finance officer's proposal answers 202 with a pending `manual_adjustment`, a `Location` on `/approvals/{id}` and no ledger row; a different finance lead's approval posts exactly one balanced `adjustment` carrying the `approval_id` and the wallet reads 100,500; approving your own proposal is 403 `self_approval_forbidden`, by user and through a second session; the consumed approval cannot authorise a second posting and one minor unit of drift from the approved lines is 403 `approval_required`; an approver linked to the customer is 403 `conflict_of_interest`; a session older than five minutes is 401 `step_up_required` before any use case runs; an overdraft debit is 409 at execution and the approval stays `pending`; a refund approval carries `original_transaction_id`, executes one reversal tied to that `approval_id` and empties the wallet) |
+| 03.6 | Accounting periods and the lock | done | this commit | `cd backend && python -m pytest tests/integration/ledger/test_periods.py -q` -> `7 passed` (a posting at `2026-09-30T23:59:59+00:00` and one at `2026-10-01T00:30+02:00` — the same UTC date — are both refused once September is locked, while `2026-10-01T00:00+00:00` posts; over HTTP the refusal is 409 `period_locked`; a September posting is corrected by a reversal dated October; the lock needs a maker and a second `finance_lead` approver, leaves the period `open` until then, and writes `locked_by`, `locked_at` and a `period.lock` audit row; an approver without the attribute is 403; three open exceptions refuse the lock with 409 `open_exceptions_remain` and `open_exceptions: 3`; a reopen is a second approval action; the list filters on status) |
+| 03.7 | Read API, statements and views | done | this commit | `cd backend && python -m pytest tests/integration/ledger/test_statements_api.py tests/integration/ledger/test_state_machine.py tests/unit/ledger/test_posting_properties.py -q` -> `13 passed` (the wallet endpoint's balance equals minus the sum of its entries and carries `pending_top_ups`; a customer reading another wallet gets 404; accounts list with a type filter and a keyset cursor; a transaction shows `direction` plus positive amounts; a statement page stays stable while rows are inserted; a support agent is 403 on `listLedgerAccounts`; no write route exists under `/ledger` beyond `POST /ledger/adjustments`; the hypothesis state machine runs top-up, debit, refund, reverse, fee, reconciliation fix, replay and a concurrent pair over 200 examples with the global sum per currency zero, every wallet equal to its fold, row hashes unchanged and at most one posting per `topup:<id>:confirm`; properties P1–P7 hold) |
+| 03.8 | Snapshots and the nightly drift job | done | this commit | `cd backend && python -m pytest tests/integration/ledger/test_snapshots_drift.py -q` -> `6 passed` (a snapshot for day D then a posting then a run for D+1 gives the prior balance plus the delta, and rerunning D inserts zero rows; a system account's materialised balance equals its entry sum; a wallet tampered by one minor unit is reported by `wallet_drift_job` with the metric incremented and a `ledger.drift_detected` row staged, while a clean database returns none; the imbalance check finds no transaction whose lines do not sum to zero and no second `topup_received` for one `source_top_up_id`) |
 
 ## Assumptions
 
@@ -626,16 +639,64 @@ the per-worker signing key and the missing `api/` in the image, which single-pro
   hub.settings.test` first and imports as the published `support@example.test` account; the
   dry run then reports `errors: []` and skips the two rows whose `external_ref` the demo already
   holds.
-- **02.9 the matrix is bounded by what is mounted**: `getCustomerWallet`, `listMeterReadings`
-  and `listMeterTokens` are declared for slices 03, 06 and 08 and have no route here, so the
-  test resolves every path first (the rule slice 01's matrix set) rather than asserting 404s
-  that prove nothing about authorization. Integrator and gateway keys arrive in slice 15, so
+- **02.9 the matrix is bounded by what is mounted**: `listMeterReadings` and `listMeterTokens`
+  are declared for slices 06 and 08 and had no route when this slice closed, so the test
+  resolves every path first (the rule slice 01's matrix set) rather than asserting 404s that
+  prove nothing about authorization. Slice 03 then mounted `getCustomerWallet` under
+  `/customers`, so that row joined the matrix and its `x-site-scoped` pin (slice 03
+  assumptions). Integrator and gateway keys arrive in slice 15, so
   their cells are pinned as refused for every credential this build can present.
 - **02.9 the cloud runner has no Docker**: the suites were run against locally built PostgreSQL
   16.2 and Redis 7.2.5 standing in for the testcontainers fixtures, because this runner cannot
   open the Docker socket. With the bundled Redis 6, eleven identity tests fail on
   `EXPIRE ... NX`; with 7.2.5 they pass. The four `test_schema_in_postgres.py` cases that
   explicitly require Docker are skipped there and must be read as unproven by this run.
+
+- **03 every approval executor is registered in `AppConfig.ready`, and that was a defect**:
+  `ledger.wiring.register_approval_executors` existed but nothing called it — the docstring
+  pointed at a `ledger.wiring.use_identity` that was never written — so `manual_adjustment`,
+  `refund`, `period.lock` and `period.reopen` had no executor and every proposal was refused
+  403 as a kind this build cannot execute. `LedgerConfig.ready` now calls it, after `identity`'s
+  `ready` has published the named ports (the app order in `INSTALLED_APPS` guarantees that; a
+  missing port raises at start-up rather than at the first approval).
+- **03 the adjustment approval's payload is the bare lines array**: `hub.post_ledger_transaction`
+  compares the approval's `payload_hash` with `hub.payload_hash(p_lines)`, and `approvals_guard`
+  hashes the whole payload, so the two agree only when the payload *is* the lines. The customer
+  goes in `subject_customer_id`, and the reason and ticket id are written to the audit record at
+  proposal time. `identity.approvals.Approval.document` therefore renders `payload` as either an
+  object or an array.
+- **03 the refund payload stays an object**: it carries `original_transaction_id`, which is what
+  `reverse_ledger_transaction` reads, so no line hash applies to it.
+- **03 `getCustomerWallet` joined the registry matrix**: slice 03 mounts it under `/customers`
+  (that is where the portal client expects it), and the contract marks it `x-site-scoped`, so
+  `tests/contract/test_registry_matrix.py` added it to `SITE_SCOPED_IDS` and its module docstring
+  no longer lists it as an unbuilt operation.
+- **03 the migrations start with a phase marker**: `0001_ledger_system_accounts`,
+  `0002_approvals_period_actions` and `0003_ledger_owner_conflict_guard_grant` each open with
+  `-- phase: expand`, which is what `test_migrations_consistent.py::test_pairing_rules` and
+  docs/04 10.5 require of every file in `db/migrations`. Each has its `RunSQL` wrapper in
+  `hub.hubdb.migrations`, and the migrated database's catalog fingerprint still equals the one
+  built from `db/schema.sql`.
+- **03 two slice-02 test fixtures were reading the wall clock**: `test_tariffs.py` and
+  `test_scope_and_masking.py` froze the clock in an autouse fixture, but their `client` fixture
+  pulls in `redis_store`, which calls `identity.wiring.reset()` — and that drops the frozen clock,
+  so approval rows were stamped with the real `now()` while the assertions moved a frozen one.
+  Two consequences: an "expired" proposal still held its date, and a customer seeded by SQL had
+  a `created_at` in the future. Fixed by making each `frozen` fixture depend on `redis_store`
+  (so the reset happens first) and by writing `created_at` from the frozen clock in
+  `test_scope_and_masking.py`'s seed. The same ordering was applied to the four other suites that
+  share the pattern (`test_locale`, `test_sites_plans`, `test_tariffs`, `test_meters_registry`).
+- **03 the ledger suite pins the wall clock**: `identity`'s step-up tests install a frozen kernel
+  clock and leave it installed, so a ten-minute-old session arrived at the ledger suite looking
+  *fresh* (a negative age is under 300 seconds) and `test_adjustment_without_step_up_is_401`
+  passed or failed depending on what ran before it. `tests/integration/ledger/conftest.py` now
+  resets the kernel and identity clocks for every ledger test unless the test installs its own.
+- **03 verification runs without Docker, again**: the suites were run against PostgreSQL 16.2 and
+  Redis 7.2.5 built locally, standing in for the testcontainers fixtures, because this runner has
+  no reachable Docker socket. Step 5 (`psql -f db/invariant_tests.sql`) is guarded in
+  `verify_slice.sh` and did not run; the four `test_schema_in_postgres.py` cases that require
+  Docker skip themselves. The demo script needs `make up`, so it did not run either — its data
+  path is what the integration suite covers.
 
 ## Open change requests
 
@@ -847,3 +908,60 @@ The demo script (nine curl steps on `make up && make seed`) could not run here: 
 compose stack, which needs Docker. Its data path is covered by
 `test_the_registry_demo_seed_is_readable_through_the_directory`, which loads the same seed and
 reads it back through the directory; the HTTP half is the demo's to prove on a Docker host.
+
+### Slice 03 verification, 2026-10-27
+
+Run with `tools/scripts/verify_slice.sh 03`'s command list (added with this slice) against the
+local PostgreSQL 16.2 and Redis 7.2.5 stand-ins, for the same reason slice 02 used them: this
+cloud runner cannot reach a Docker socket, so the testcontainers fixtures cannot start.
+
+```
+$ ruff check                                  All checks passed!
+$ ruff format --check                         305 files already formatted
+$ mypy (DJANGO_SETTINGS_MODULE=hub.settings.test)  Success: no issues found in 303 source files
+$ lint-imports                                Contracts: 119 kept, 0 broken.
+
+==> cd backend && python -m pytest tests/unit/ledger tests/architecture/test_ledger_models.py tests/architecture/test_ledger_leaf.py -q
+18 passed in 6.71s
+
+==> cd backend && python -m pytest tests/integration/ledger -q      (twice, per the plan)
+49 passed in 5.63s
+49 passed in 6.01s
+
+==> cd backend && python -m pytest tests -q -m tc --strict-markers
+180 passed, 391 deselected in 29.94s
+
+==> cd backend && python -m pytest tests/integration -q -m integration --strict-markers
+325 passed in 40.37s
+
+==> cd backend && python -m pytest tests/unit tests/architecture tests/contract -q
+246 passed in 22.59s
+
+==> python -m pytest tests/test_alignment.py tests/test_schema_in_postgres.py tests/test_traceability.py -q
+30 passed, 4 skipped in 1.27s     # the four need Docker
+
+==> python tools/check_traceability.py
+0 error(s), 0 warning(s)
+
+==> python -c "openapi_spec_validator.validate(...)"
+openapi.yaml is valid
+
+==> psql -f db/invariant_tests.sql
+not run: no psql/DSN in this runner (guarded in verify_slice.sh)
+```
+
+Per-file, for the task log:
+
+```
+test_posting_domain.py     8 passed      test_db_defences.py       8 passed
+test_posting_properties.py 3 passed      test_post_function.py     3 passed
+test_ledger_models.py      4 passed      test_concurrency.py       3 passed
+test_ledger_leaf.py        3 passed      test_reversal.py          5 passed
+test_adjustment_flow.py    7 passed      test_periods.py           7 passed
+test_statements_api.py     9 passed      test_snapshots_drift.py   6 passed
+test_state_machine.py      1 passed
+```
+
+The whole backend suite (unit, architecture, contract, integration) is green after this slice:
+`325` integration cases and `246` unit/architecture/contract ones, with the four Docker-only
+schema cases and the `psql` invariant run as the only unproven checks.

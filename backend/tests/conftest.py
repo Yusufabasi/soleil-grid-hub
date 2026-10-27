@@ -34,6 +34,7 @@ from hub.settings.base import build_database
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_SQL = REPO_ROOT / "db" / "schema.sql"
+MIGRATIONS_DIR = REPO_ROOT / "db" / "migrations"
 
 # `tests/support` is importable as `support.*` from every test module: the helpers there are
 # shared, and a settings string (an authentication class) has to be importable by dotted path.
@@ -97,7 +98,13 @@ class PostgresServer:
 
 @pytest.fixture(scope="session")
 def postgres_server() -> Iterator[PostgresServer]:
-    """PostgreSQL 16 with ``db/schema.sql`` applied to ``hub_test``, once per session."""
+    """PostgreSQL 16 with ``db/schema.sql`` and the migration chain applied, once per session.
+
+    The chain in ``db/migrations`` is part of the deployed schema: slice 03's system accounts
+    and the approval actions of D-40 live there, and a test database without them would be a
+    database no environment has. Applying the files in order is exactly what the ``hubdb``
+    wrappers do, so the harness does not depend on Django's migration table.
+    """
     with PostgresContainer(POSTGRES_IMAGE, driver="psycopg", dbname="hub_test") as postgres:
         admin_dsn = _libpq_dsn(postgres.get_connection_url())
         server = PostgresServer(admin_dsn, admin_user=urlsplit(admin_dsn).username or "postgres")
@@ -105,6 +112,8 @@ def postgres_server() -> Iterator[PostgresServer]:
             # One statement list: the schema is written to run as a superuser on an empty
             # database (db/schema.sql header), so it is executed in a single call.
             connection.execute(SCHEMA_SQL.read_text(encoding="utf-8"), prepare=False)
+            for migration in sorted(MIGRATIONS_DIR.glob("[0-9][0-9][0-9][0-9]_*.sql")):
+                connection.execute(migration.read_text(encoding="utf-8"), prepare=False)
         yield server
 
 
@@ -145,6 +154,20 @@ def redis_store(settings: Any, redis_url: str) -> Iterator[redis.Redis]:
     finally:
         client.flushdb()
         wiring.reset()
+
+
+@pytest.fixture(scope="session")
+def serialized_rollback() -> bool:
+    """Restore the schema's reference rows after a ``transaction=True`` test truncates them.
+
+    pytest-django empties every table after a transactional test. In this schema the reference
+    data is part of the database, not of a fixture: the role matrix and ``role_permissions``
+    (which decide whether a principal may propose an approval), and the ledger's system accounts
+    (which a posting names). Without a serialized snapshot the tests that follow such a test in
+    the same session would find an empty schema, and the failure would look like a permission
+    bug. Serializing once per session and restoring is what `django.test.TestCase` does.
+    """
+    return True
 
 
 @pytest.fixture(scope="session")

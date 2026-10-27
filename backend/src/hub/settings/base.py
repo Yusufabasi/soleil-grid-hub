@@ -112,6 +112,10 @@ HUB_CUSTOMER_ABSOLUTE_SECONDS = env.int("HUB_CUSTOMER_ABSOLUTE_SECONDS", default
 HUB_STEP_UP_MAX_AGE_SECONDS = env.int("HUB_STEP_UP_MAX_AGE_SECONDS", default=300)
 HUB_APPROVAL_TTL_HOURS = env.int("HUB_APPROVAL_TTL_HOURS", default=72)
 
+# The balance below which `wallet.low_balance` is emitted, in minor units of the wallet's
+# currency (slice 03 open item: the threshold by currency is finance's to tune).
+HUB_LEDGER_LOW_BALANCE_MINOR = env.int("HUB_LEDGER_LOW_BALANCE_MINOR", default=100)
+
 # The refresh cookie is scoped to the auth routes only (D-17).
 HUB_REFRESH_COOKIE_NAME = "sg_refresh"
 HUB_REFRESH_COOKIE_PATH = "/api/v1/auth"

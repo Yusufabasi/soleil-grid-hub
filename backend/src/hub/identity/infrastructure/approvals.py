@@ -53,7 +53,7 @@ class ApprovalRepository:
         subject_customer_id: UUID | None,
         maker_user_id: UUID,
         maker_session_id: UUID,
-        payload: Mapping[str, Any],
+        payload: Mapping[str, Any] | Sequence[Any],
         expires_at: datetime,
         created_at: datetime,
     ) -> Mapping[str, Any]:
@@ -64,7 +64,9 @@ class ApprovalRepository:
             subject_customer_id,
             maker_user_id,
             maker_session_id,
-            Jsonb(dict(payload)),
+            # A payload is usually an object but may be a bare array: the ledger's adjustment
+            # approval hashes exactly the lines `post_ledger_transaction` compares against.
+            Jsonb(payload if isinstance(payload, list) else dict(payload)),
             # The trigger overwrites this; the column is NOT NULL, so a placeholder is what the
             # insert needs.
             "0" * 64,

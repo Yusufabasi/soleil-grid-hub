@@ -1,0 +1,16 @@
+-- phase: expand
+-- 0003_ledger_owner_conflict_guard_grant: let a ledger function read the conflict table.
+--
+-- `hub.approvals_guard` refuses an approval whose maker or approver is linked to the customer it
+-- concerns (D-15), and it runs as the role that updated the row. The ledger functions mark the
+-- approval `consumed` from inside `hub.post_ledger_transaction` and
+-- `hub.reverse_ledger_transaction`, which are SECURITY DEFINER and run as `ledger_owner`. The
+-- baseline grants that owner SELECT on `hub.approvals` but not on `hub.staff_customer_link`, so
+-- every manual posting failed at the guard with
+-- ``permission denied for table staff_customer_link``.
+--
+-- The narrowest fix: SELECT on the one table the guard's own query reads. No write, no other
+-- table, and `ledger_owner` already reads `hub.customers` for the same reason. Additive and
+-- idempotent, so folding it into `db/schema.sql` later leaves this file harmless. See
+-- docs/plan/change-requests/CR-001-ledger-owner-conflict-guard-grant.md.
+GRANT SELECT ON hub.staff_customer_link TO ledger_owner;

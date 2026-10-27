@@ -1,0 +1,12 @@
+{
+  "approval_required": "Une écriture manuelle exige une approbation approuvée liée à ces lignes.",
+  "currency_mismatch": "Toutes les lignes d'une écriture doivent être dans une seule devise, celle du portefeuille.",
+  "evidence_required": "Une annulation exige un événement fournisseur enregistré ou un remboursement approuvé.",
+  "insufficient_wallet_balance": "Le portefeuille ne couvre pas ce débit ; il faut d'abord l'approvisionner.",
+  "open_exceptions_remain": "La période compte encore des exceptions de rapprochement ouvertes ; il faut les traiter.",
+  "period_already_locked": "La période comptable est déjà verrouillée.",
+  "period_locked": "La date d'effet tombe dans une période comptable verrouillée ; passez une écriture inverse dans une période ouverte.",
+  "period_not_locked": "La période comptable n'est pas verrouillée : il n'y a rien à rouvrir.",
+  "unbalanced_posting": "Les débits et les crédits de l'écriture ne s'équilibrent pas.",
+  "unknown_ledger_account": "Le compte comptable nommé par cette écriture n'existe pas."
+}
