@@ -975,11 +975,53 @@ green:
 |---|---|---|---|---|
 | 04.1 | Unmanaged models, repositories and the top-up state rules | done | `fa3cf12` | `cd backend && python -m pytest tests/unit/payments tests/integration/payments -q` -> `10 passed` (all 64 status pairs agree with `hub.top_ups_guard`, checked against a transcription of the trigger rather than against the dict the code reads; a confirmation past the window sets `late`, one from `initiated` walks `pending -> confirmed`, `failed`/`confirmed`/`reversed` refuse it, a repeat cancel is a no-op; the three shims align with `db/schema.sql` in both directions and are unmanaged); `ruff check`, `ruff format --check` and `mypy` clean; `lint-imports` -> `119 kept, 0 broken` |
 
-Remaining, in the slice's order: 04.2 initiation (quote snapshot, limits, 7-day idempotency),
-04.3 read and cancel, 04.4 signature verification and quarantine, 04.5 `ConfirmPayment`,
-04.6 the fifty-way concurrency suite, 04.7 the ingest migration and `hub.post_suspense_receipt`,
-04.8 late/mismatch routing and pull verification, 04.9 reversals, 04.10 sweepers and webhook-log
-operations, 04.11 wiring, conformance and the stub end-to-end run.
+#### Tasks 04.2-04.4 (commit `cd9c4a9`)
+
+| Task | Scope | Test command and result |
+|---|---|---|
+| 04.2 | Initiation: quote snapshot, plan limits, 7-day idempotency, provider call outside the transaction | `cd backend && python -m pytest tests/unit/payments/test_initiate_top_up.py -q` -> `10 passed`; `python -m pytest tests/integration/payments/test_initiation_api.py -q` -> `13 passed` (same key replays with one collection, another body is 422 `idempotency_key_reuse`, missing key is 400 `idempotency_key_required`, +7 days and 1 s is a new top-up, all four staff roles are 403, `customer_id` in a customer's body is ignored) |
+| 04.3 | `getTopUp`, `listTopUps`, `cancelTopUp` with scope and masking | the same module -> `test_get_top_up_customer_sees_only_own`, `test_list_top_ups_cursor_pagination`, `test_integrator_scope_topups_read_required`, `test_cancel_pending_sets_cancelled`, `test_cancel_twice_is_idempotent_200`, `test_cancel_confirmed_is_409_invalid_state_transition`, `test_masked_payer_number_in_response` all pass |
+| 04.4 | HMAC signature over `timestamp.event_id.body`, 300 s window, quarantine log, the plain-Django webhook shell | `python -m pytest tests/unit/payments/test_signature.py -q` -> `5 passed`; `python -m pytest tests/integration/payments/test_webhook_signature.py -q` -> `9 passed` |
+
+The whole payments suite: `57 passed` (`tests/unit/payments` + `tests/integration/payments`).
+Whole backend suite: `632 passed`; root `pytest tests -q` -> `42 passed, 5 deselected`;
+`ruff check` and `ruff format --check` clean; `mypy src` clean (256 files);
+`lint-imports` -> `119 kept, 0 broken`; `tools/check_django_config.py` passed;
+`tools/check_traceability.py` -> `0 error(s), 0 warning(s)`; `api/openapi.yaml` valid.
+
+Three defects this run found, all fixed in the owning file rather than in a test:
+
+1. **`StaleTimestamp` was a 422.** It inherited `ValidationFailed`, while docs/05 and the slice
+   say 400. It now inherits `InvalidRequest`: the body parsed and the signature verified, so
+   nothing about the payload is wrong and no `errors[]` applies.
+2. **The plain webhook view answered 503 without `Retry-After`.** DRF's handler adds it; a plain
+   Django view does not. `_problem` now passes `retry_after(exc)`, which is the whole point of
+   that answer — the provider's retry policy.
+3. **An aborted transaction behind a rejected delivery.** The quarantine insert used
+   `reason='event_id_mismatch'`, which `ck_webhook_quarantine_reason` refuses (its vocabulary is
+   closed: `bad_signature`, `stale_timestamp`, `malformed`, `unknown_provider`). The refusal also
+   poisoned the caller's transaction, so every later statement in the request failed. The reason
+   is now `malformed` — a delivery whose header and body name different events *is* malformed —
+   and the insert owns a savepoint, so a log that refuses its entry cannot take the caller down
+   with it.
+
+Two composition changes were forced by the import contracts, which is the point of having them:
+`retry_transient` moved to `hub.shared.retry` (Django-free, because the application layer may not
+import the framework), and `payments` reaches the meter registry through the kernel instead of
+importing `hub.meters`, which the module DAG forbids. Its own `MeterStatusLookup` port says what
+it uses of the registry, and `meters.contracts` satisfies it structurally.
+
+Test-environment notes: `settings/test.py` now gives `mpesa_cd` the stub's webhook secret, because
+a top-up is collected on a real channel and its delivery has to arrive on that channel's route —
+the default configuration only knew `synthetic`, so the delivery could never find the top-up it
+paid for. `tests/integration/ledger/test_statements_api.py` had an absolute checkout path left
+from another machine and now derives the repository root from its own location.
+
+Remaining, in the slice's order: 04.5 `ConfirmPayment` (the credit path, which is why a
+confirmed delivery currently answers 503 and commits nothing), 04.6 the fifty-way concurrency
+suite, 04.7 the ingest migration and `hub.post_suspense_receipt`, 04.8 late/mismatch routing and
+pull verification, 04.9 reversals, 04.10 sweepers and webhook-log operations, 04.11 wiring,
+conformance and the stub end-to-end run.
 
 Two of those cannot be proved in this runner even when written: 04.11's e2e tests and 04.6's
 four-worker test need `make up` (Docker), and the schemathesis harness it names is track T4 and
