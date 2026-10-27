@@ -1017,9 +1017,47 @@ the default configuration only knew `synthetic`, so the delivery could never fin
 paid for. `tests/integration/ledger/test_statements_api.py` had an absolute checkout path left
 from another machine and now derives the repository root from its own location.
 
-Remaining, in the slice's order: 04.5 `ConfirmPayment` (the credit path, which is why a
-confirmed delivery currently answers 503 and commits nothing), 04.6 the fifty-way concurrency
-suite, 04.7 the ingest migration and `hub.post_suspense_receipt`, 04.8 late/mismatch routing and
+#### Task 04.5 (commit `805d4cd`)
+
+`cd backend && python -m pytest tests/integration/payments/test_confirm_payment.py -q` -> `14 passed`.
+The module covers the plan's thirteen cases plus one: `test_a_late_confirmation_of_an_expired_top_up_is_credited`
+(the `expired -> confirmed` edge with `late = true`, D-05) and
+`test_a_confirmation_for_a_failed_top_up_is_not_silently_accepted`, which pins the 503 this build
+answers until Task 04.8 routes that delivery to `suspense`. The placeholder test that asserted the
+503 in `test_webhook_signature.py` is gone: the credit path exists now.
+
+| Command | Result |
+|---|---|
+| `pytest tests/unit/payments tests/integration/payments -q` | `70 passed` |
+| `pytest -q` (whole backend) | `645 passed` |
+| `pytest ../tests -q` (root contracts) | `42 passed, 5 deselected` |
+| `ruff check .`, `ruff format --check .` | clean (333 files) |
+| `mypy src` | clean (256 files) |
+| `lint-imports --config .importlinter` | `119 kept, 0 broken` |
+
+Two defects found while writing the tests, both fixed in the owning file:
+
+1. **`last_error` was being erased.** `_fail` marked the event `processed` with
+   `last_error='ignored_terminal'` and the single `mark(...)` at the end of the dispatch then wrote
+   `NULL` over it, so a `payment.failed` that arrived after a confirmation recorded *why it was
+   ignored* nowhere. `_fail` now returns the reason and the event is marked once, after routing.
+2. **`ensure_wallet` was the wrong call on the credit path.** The deployed webhook pool connects as
+   `hub_ingest`, which holds `EXECUTE` on `hub.post_ledger_transaction` but not on
+   `hub.create_wallet_account`; the first draft would have answered 500 on every confirmation in
+   production while passing every test that ran as the harness superuser. The wallet is created by
+   `InitiateTopUp` in the transaction that inserts the top-up, so the credit path no longer asks for
+   one. The same probe showed that resolving account ids as `hub_ingest` needs
+   `GRANT SELECT ON hub.ledger_accounts`, which is exactly Task 04.7's migration — the
+   deployed-role assertion therefore belongs to 04.7's `test_hub_ingest_can_select_ledger_accounts_but_not_write`
+   rather than to this task.
+
+Recorded rather than hidden: `payer_matched` stores a real comparison (both numbers in E.164,
+`True` when the delivery names no payer) instead of the plan's literal `True`; a confirmation for a
+`failed`/`reversed` top-up, or a second distinct charge against an already-confirmed one, answers
+503 and commits nothing until 04.8 routes it to `suspense`; and `payment.confirmed` carries
+`quoted_energy_wh` from the row's stored snapshot, which is the D-08 value the token saga will read.
+
+Remaining, in the slice's order: 04.6 the fifty-way concurrency suite, 04.7 the ingest migration and `hub.post_suspense_receipt`, 04.8 late/mismatch routing and
 pull verification, 04.9 reversals, 04.10 sweepers and webhook-log operations, 04.11 wiring,
 conformance and the stub end-to-end run.
 
