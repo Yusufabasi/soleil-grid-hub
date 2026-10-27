@@ -26,6 +26,7 @@ from hub.customers import wiring as customers_wiring
 from hub.customers.contracts import CustomerDirectory
 from hub.identity import wiring as identity_wiring
 from hub.ledger import wiring as ledger_wiring
+from hub.ledger.contracts import LedgerService
 from hub.payments.application.confirm_payment import ConfirmPayment
 from hub.payments.application.initiate_top_up import (
     InitiateTopUpService,
@@ -50,6 +51,7 @@ __all__ = [
     "ids",
     "initiation",
     "knows_provider",
+    "ledger",
     "provider_secrets",
     "quarantine_reservations",
     "reset",
@@ -150,6 +152,11 @@ def meters() -> MeterStatusLookup:
 
 def _customers() -> CustomerDirectory:
     return customers_wiring.customer_directory()
+
+
+def ledger() -> LedgerService:
+    """The ledger's posting surface, which is what the credit path names (docs/03 2.5)."""
+    return ledger_wiring.service()
 
 
 def _wallet() -> WalletPort:
@@ -263,6 +270,7 @@ def confirm_payment() -> ConfirmPayment:
                     provider=gateway(str(settings.HUB_PAYMENTS_PROVIDER)),
                     top_ups=top_up_repository(),
                     events=event_repository(),
+                    ledger=ledger(),
                     cache=cache(),
                     unit_of_work=unit_of_work,
                 )

@@ -25,7 +25,7 @@ from hub.payments.infrastructure.fake_provider import (
     TIMESTAMP_HEADER,
     FakeProviderGateway,
 )
-from support.payments import NOW, PAYER, World, customer_token
+from support.payments import NOW, PAYER, World
 
 pytestmark = [pytest.mark.integration, pytest.mark.django_db]
 
@@ -215,40 +215,3 @@ def test_failure_counter_increments(client: Client) -> None:
 
     after = REGISTRY.get_sample_value("webhook_quarantine_total", labels) or 0.0
     assert after == before + 1
-
-
-def test_accepted_delivery_for_a_known_top_up_is_not_silently_credited(
-    client: Client, world: World
-) -> None:
-    """The credit path is Task 04.5: until it lands, a confirmed payment answers 503 and
-    commits nothing, so the provider retries instead of being told the money arrived."""
-    with override_settings(ROOT_URLCONF="hub.urls.api"):
-        created = client.post(
-            "/api/v1/top-ups",
-            {
-                "meter_id": str(world.meter_id),
-                "amount": {"amount_minor": 500, "currency": "USD"},
-                "provider": "mpesa_cd",
-                "payer_msisdn": PAYER,
-            },
-            content_type="application/json",
-            headers={
-                "Authorization": f"Bearer {customer_token(world.customer_id)}",
-                "Idempotency-Key": "webhook-known",
-            },
-        )
-    assert created.status_code == 202, created.json()
-    top_up_id = created.json()["data"]["id"]
-
-    # The delivery arrives on the route of the provider the top-up was collected on; a
-    # webhook on another provider's route can only ever name an unknown reference.
-    response = deliver(
-        client,
-        envelope("evt_known", external_reference=uuid.UUID(top_up_id)),
-        provider="mpesa_cd",
-    )
-
-    assert response.status_code == 503, response.json()
-    assert response["Retry-After"] == "30"
-    # Nothing committed: the event row rolled back with the transaction.
-    assert event_rows() == 0

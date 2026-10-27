@@ -15,10 +15,15 @@ The order of the steps is the requirement (docs/03 6.1, ADR-0004):
    outbox row commit together or not at all, so a 503 leaves nothing behind and a retry is
    safe.
 
-This task lands the verification, the event log and the two outcomes that do not move money
-(a failed collection, and a delivery naming a top-up this build does not have). The credit and
-reversal paths are Tasks 04.5 and 04.9; until they exist, a confirmed delivery answers 503 and
-commits nothing, which is the one answer a provider retries rather than trusts.
+A confirmation moves money, and the ledger function decides whether it may: it reads the
+top-up's *stored* ``provider_event_id`` and refuses a credit whose evidence does not match the
+amount, the currency or the provider's transaction id. So the writes inside the transaction
+have a fixed order — record the evidence, then post, then mark the row confirmed — and the
+ledger is the reason, not a convention.
+
+Two deliveries this build does not route yet answer 503 and commit nothing: a reversal, and a
+confirmation of a top-up the hub already gave up on. Both are Tasks 04.8 and 04.9; a 503 is
+the one answer a provider retries, and nothing about the money has been decided.
 """
 
 from __future__ import annotations
@@ -29,12 +34,15 @@ from datetime import datetime
 from typing import Any, Protocol
 from uuid import UUID
 
+from hub.customers.domain.phone import normalise_e164
+from hub.ledger.contracts import AccountRef, LedgerService, PostingLine, PostingRequest
 from hub.payments.application.ports import ProviderGateway, VerifiedEvent
 from hub.payments.contracts import ProviderEventRow, TopUpRow, WebhookAck
-from hub.payments.domain.errors import CreditPathUnavailable
-from hub.payments.domain.top_up import TopUp
-from hub.payments.events import payment_failed, reconciliation_exception
+from hub.payments.domain.errors import CreditPathUnavailable, InvalidTopUpState
+from hub.payments.domain.top_up import CONFIRMED, TopUp
+from hub.payments.events import payment_confirmed, payment_failed, reconciliation_exception
 from hub.shared.contracts import KeyValueStore, UnitOfWork
+from hub.shared.money import Currency
 from hub.shared.ports import Clock, IdGenerator
 from hub.shared.retry import retry_transient
 
@@ -112,6 +120,7 @@ class ConfirmPayment:
         provider: ProviderGateway,
         top_ups: WebhookTopUpStore,
         events: ProviderEventStore,
+        ledger: LedgerService,
         cache: KeyValueStore,
         unit_of_work: UnitOfWorkFactory,
     ) -> None:
@@ -120,6 +129,7 @@ class ConfirmPayment:
         self._provider = provider
         self._top_ups = top_ups
         self._events = events
+        self._ledger = ledger
         self._cache = cache
         self._unit_of_work = unit_of_work
 
@@ -169,16 +179,131 @@ class ConfirmPayment:
                 return ACCEPTED
 
             if data.type == "payment.failed":
-                self._fail(top_up, data, event_row_id, uow, now)
+                last_error = self._fail(top_up, data, event_row_id, uow, now)
+            elif data.type == "payment.reversed":
+                # Task 04.9 lands the reversal; raising rolls the event row back with the
+                # transaction, so a retry finds no row and no half-decided money.
+                raise CreditPathUnavailable(details={"reason": "reversal_not_implemented"})
             else:
-                # Task 04.5 (credit) and 04.9 (reversal) land the money paths. Raising here
-                # rolls the event row back with the transaction, so the provider's retry finds
-                # no row and no second effect: 503 means "nothing was committed", which is
-                # exactly what a retry needs to be safe.
-                raise CreditPathUnavailable()
+                last_error = self._confirm(top_up, data, event_row_id, uow, now)
 
-            self._events.mark(event_row_id, status="processed", processed_at=now)
+            # One mark for every routed delivery, so a reason written inside a branch cannot
+            # be overwritten by this statement's default (it was, before this was one call).
+            self._events.mark(
+                event_row_id, status="processed", processed_at=now, last_error=last_error
+            )
         return ACCEPTED
+
+    def _confirm(
+        self,
+        top_up: TopUpRow,
+        data: VerifiedEvent,
+        event_row_id: UUID,
+        uow: UnitOfWork,
+        now: datetime,
+    ) -> str | None:
+        """Credit the wallet once, in three writes the database's own rules force into order.
+
+        1. **The evidence first.** ``hub.post_ledger_transaction`` reads the top-up's stored
+           ``provider_event_id`` and refuses the credit when the event's amount, currency or
+           provider transaction id disagrees with the top-up. So the row is pointed at the
+           event before the ledger is asked for anything — and a first confirmation also
+           records the ``initiated -> pending`` step the guard requires.
+
+        The posting assumes the wallet exists. It does: ``InitiateTopUp`` calls
+        ``ensure_wallet`` in the transaction that inserted the row, and ``create_wallet_account``
+        is executed only by roles that hold its grant — which the webhook pool does not.
+        2. **Then the posting.** ``posting_key = topup:<id>:confirm`` is the at-most-once
+           guard: a replay returns the same transaction instead of a second effect.
+        3. **Then the row.** ``confirmed`` needs its ledger transaction and its instant in the
+           same statement (``ck_top_ups_confirmed``), and ``late`` can only be set alongside
+           it (``ck_top_ups_late``).
+        """
+        current = TopUp(
+            id=top_up.id, status=top_up.status, expires_at=top_up.expires_at, late=top_up.late
+        )
+        try:
+            outcome = current.confirm(now)
+        except InvalidTopUpState as exc:
+            # `failed`, `reversed`, or a second distinct charge against a top-up that already
+            # has one: none of these can be credited by this build. Task 04.8 routes them to
+            # `suspense`; until then the provider is told to retry and nothing is committed,
+            # which is the only answer that neither loses the money nor invents an allocation.
+            raise CreditPathUnavailable(
+                details={"reason": "unroutable_state", "status": current.status}
+            ) from exc
+
+        evidence: dict[str, Any] = {
+            "provider_event_id": event_row_id,
+            "provider_txn_id": data.provider_reference,
+            "payer_matched": _payer_matches(top_up.payer_msisdn, data.payer_msisdn),
+            "updated_at": now,
+        }
+        if len(outcome.steps) > 1:
+            # A top-up whose provider answer never arrived is still `initiated`; no path
+            # credits it in one step, so the intermediate status is written first.
+            evidence["status"] = outcome.steps[0]
+        self._top_ups.update_fields(top_up.id, **evidence)
+
+        amount = top_up.amount
+        currency: Currency = amount.currency
+        # No `ensure_wallet` here, and that is a permission, not an omission: the webhook pool
+        # connects as `hub_ingest`, which may post through the definer function but may not
+        # execute `hub.create_wallet_account`. The wallet already exists — initiation created it
+        # in the same transaction that inserted this top-up, as `hub_api`.
+        posted = self._ledger.post(
+            PostingRequest(
+                posting_key=f"topup:{top_up.id}:confirm",
+                kind="topup_received",
+                lines=[
+                    PostingLine(
+                        account=AccountRef(
+                            kind="provider_clearing", currency=currency, provider=top_up.provider
+                        ),
+                        direction="debit",
+                        amount=amount,
+                    ),
+                    PostingLine(
+                        account=AccountRef(
+                            kind="customer_wallet",
+                            currency=currency,
+                            customer_id=top_up.customer_id,
+                        ),
+                        direction="credit",
+                        amount=amount,
+                    ),
+                ],
+                effective_at=now,
+                source_top_up_id=top_up.id,
+            ),
+            uow=uow,
+        )
+        self._top_ups.update_fields(
+            top_up.id,
+            status=CONFIRMED,
+            late=outcome.late,
+            ledger_transaction_id=posted.transaction_id,
+            confirmed_at=now,
+            updated_at=now,
+        )
+        uow.outbox.add(
+            payment_confirmed(
+                ids=self._ids,
+                occurred_at=now,
+                top_up_id=top_up.id,
+                customer_id=top_up.customer_id,
+                meter_id=top_up.meter_id,
+                amount=amount,
+                provider=top_up.provider,
+                provider_txn_id=data.provider_reference,
+                confirmed_at=now,
+                late=outcome.late,
+                quoted_energy_wh=top_up.energy_wh,
+                plan_tariff_id=top_up.plan_tariff_id,
+                ledger_transaction_id=posted.transaction_id,
+            )
+        )
+        return None
 
     def _park_unknown_reference(
         self, data: VerifiedEvent, event_row_id: UUID, uow: UnitOfWork, now: datetime
@@ -210,21 +335,18 @@ class ConfirmPayment:
         event_row_id: UUID,
         uow: UnitOfWork,
         now: datetime,
-    ) -> None:
-        """A refused collection moves a waiting top-up to ``failed``; nothing is posted."""
+    ) -> str | None:
+        """A refused collection moves a waiting top-up to ``failed``; nothing is posted.
+
+        Returns the reason to store on the event when the delivery was deliberately ignored.
+        """
         current = TopUp(
             id=top_up.id, status=top_up.status, expires_at=top_up.expires_at, late=top_up.late
         )
         if current.status not in ("initiated", "pending", "pending_unknown"):
             # `confirmed`, `expired`, `cancelled` or already `failed`: a later failure must
             # never downgrade a row that already has money behind it.
-            self._events.mark(
-                event_row_id,
-                status="processed",
-                processed_at=now,
-                last_error="ignored_terminal",
-            )
-            return
+            return "ignored_terminal"
         self._top_ups.update_fields(top_up.id, status="failed", updated_at=now)
         uow.outbox.add(
             payment_failed(
@@ -236,6 +358,7 @@ class ConfirmPayment:
                 failure_code=data.failure_code,
             )
         )
+        return None
 
     # --- the hint -------------------------------------------------------------------------
     def _hint_key(self, provider: str, event_id: str) -> str:
@@ -257,6 +380,23 @@ class ConfirmPayment:
             )
         except Exception:  # noqa: BLE001 - see the docstring
             logger.warning("payments.hint_write_failed", extra={"provider": provider})
+
+
+def _payer_matches(expected: str | None, delivered: str | None) -> bool:
+    """Whether the delivery's payer is the number the top-up was opened for (D-09).
+
+    The routing decision (``suspense`` on a mismatch) is Task 04.8; this records the fact the
+    column exists for, and only claims a comparison it actually made: a delivery that names no
+    payer cannot contradict the pending top-up, and the two sides are compared in E.164.
+    """
+    if delivered is None:
+        return True
+    if expected is None:
+        return True
+    try:
+        return normalise_e164(delivered) == normalise_e164(expected)
+    except ValueError:
+        return delivered.strip() == expected.strip()
 
 
 def _provider_txn_id(data: VerifiedEvent) -> str:
