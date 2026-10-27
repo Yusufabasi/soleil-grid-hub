@@ -965,3 +965,23 @@ test_state_machine.py      1 passed
 The whole backend suite (unit, architecture, contract, integration) is green after this slice:
 `325` integration cases and `246` unit/architecture/contract ones, with the four Docker-only
 schema cases and the `psql` invariant run as the only unproven checks.
+
+### Slice 04 in progress (2026-10-27)
+
+Slice 04 (payments, the exactly-once webhook) is started and not finished. What is on disk and
+green:
+
+| Task | Scope | Status | Commit | Test command and result |
+|---|---|---|---|---|
+| 04.1 | Unmanaged models, repositories and the top-up state rules | done | `fa3cf12` | `cd backend && python -m pytest tests/unit/payments tests/integration/payments -q` -> `10 passed` (all 64 status pairs agree with `hub.top_ups_guard`, checked against a transcription of the trigger rather than against the dict the code reads; a confirmation past the window sets `late`, one from `initiated` walks `pending -> confirmed`, `failed`/`confirmed`/`reversed` refuse it, a repeat cancel is a no-op; the three shims align with `db/schema.sql` in both directions and are unmanaged); `ruff check`, `ruff format --check` and `mypy` clean; `lint-imports` -> `119 kept, 0 broken` |
+
+Remaining, in the slice's order: 04.2 initiation (quote snapshot, limits, 7-day idempotency),
+04.3 read and cancel, 04.4 signature verification and quarantine, 04.5 `ConfirmPayment`,
+04.6 the fifty-way concurrency suite, 04.7 the ingest migration and `hub.post_suspense_receipt`,
+04.8 late/mismatch routing and pull verification, 04.9 reversals, 04.10 sweepers and webhook-log
+operations, 04.11 wiring, conformance and the stub end-to-end run.
+
+Two of those cannot be proved in this runner even when written: 04.11's e2e tests and 04.6's
+four-worker test need `make up` (Docker), and the schemathesis harness it names is track T4 and
+not in this tree. The slice also depends on slice T1's provider stub, which is not built yet;
+04.2 onward need at least its `fake_provider` half.
