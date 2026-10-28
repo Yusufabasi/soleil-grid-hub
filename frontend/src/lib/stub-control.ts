@@ -4,8 +4,14 @@
  * `tools/provider_stub` guards everything under `/control/` with a bearer token
  * (`STUB_CONTROL_TOKEN`). That value is a secret in the sense that matters here: it lets its holder
  * make the provider complete, fail or misreport any collection, so it must never reach client-side
- * JavaScript. Only the two route handlers under `src/app/api/demo/` import this module, and they run
+ * JavaScript. Only the two route handlers under `src/app/sandbox/` import this module, and they run
  * on the server (demo-shell-plan.md §6).
+ *
+ * Deliberately outside `/api/`: the edge balancer routes every path beginning `/api/` to the Django
+ * backend (`infra/lb/haproxy.cfg`'s `is_api` ACL, evaluated before any catch-all), so a route handler
+ * under `src/app/api/` is unreachable in the deployed shape (`make up WEB=real`) — the balancer 404s
+ * it before Next.js ever sees the request. `/sandbox/` is not claimed by any ACL, so it reaches
+ * `be_web` like any other page.
  *
  * The base URL is chosen the same way compose and a developer machine differ: inside the compose
  * network the service answers to `provider-stub:9100`, on a laptop it is published on `localhost:9100`.

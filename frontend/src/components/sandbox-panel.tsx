@@ -60,7 +60,7 @@ export function SandboxPanel({ topUp, onChanged }: { topUp: TopUp; onChanged: ()
     setRunning("complete");
     setError(null);
     try {
-      const stub = await callSandbox("/api/demo/complete-collection", { top_up_id: topUp.id });
+      const stub = await callSandbox("/sandbox/complete-collection", { top_up_id: topUp.id });
       setAnswer({ action: "complete", stub });
       onChanged();
     } catch (failure) {
@@ -74,7 +74,7 @@ export function SandboxPanel({ topUp, onChanged }: { topUp: TopUp; onChanged: ()
     setRunning("mismatch");
     setError(null);
     try {
-      const stored = await callSandbox("/api/demo/add-scenario", {
+      const stored = await callSandbox("/sandbox/add-scenario", {
         // The hub's own reference for the collection — the top-up id — which is what the double
         // compares a scenario against. The `MP…` string below addresses the collection, but it is
         // not what the collection is *called* on the way in.
@@ -84,7 +84,7 @@ export function SandboxPanel({ topUp, onChanged }: { topUp: TopUp; onChanged: ()
         // The provider will claim it collected a hundred minor units more than the customer asked for.
         params: { amount_minor: topUp.amount.amount_minor + 100 },
       });
-      const stub = await callSandbox("/api/demo/complete-collection", { top_up_id: topUp.id });
+      const stub = await callSandbox("/sandbox/complete-collection", { top_up_id: topUp.id });
       setAnswer({ action: "mismatch", stub });
       setScenario(stored);
       onChanged();

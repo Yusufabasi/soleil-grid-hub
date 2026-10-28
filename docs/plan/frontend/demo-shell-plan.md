@@ -271,12 +271,19 @@ negatives: no confirmation and no money"*):
 
 **Why a Next.js server route and not a direct browser call to the stub:** `STUB_CONTROL_TOKEN` is
 a secret (it's in `.env`, required by `docker compose`); it must never reach client-side JS. Two
-small server routes, `src/app/api/demo/complete-collection/route.ts` and
-`src/app/api/demo/add-scenario/route.ts`, read `STUB_CONTROL_TOKEN` and `PROVIDER_STUB_BASE_URL`
+small server routes, `src/app/sandbox/complete-collection/route.ts` and
+`src/app/sandbox/add-scenario/route.ts`, read `STUB_CONTROL_TOKEN` and `PROVIDER_STUB_BASE_URL`
 from server-only env vars (default `http://localhost:9100` for `npm run dev`, or
 `http://provider-stub:9100` when the frontend itself runs inside the compose network) and proxy
 the one call each needs. This is the only demo-specific backend-adjacent code in the whole plan,
 and it's two thin proxy routes, not a feature.
+
+**Correction (found during review): not under `/api/`.** This section originally put these routes
+at `src/app/api/demo/*`. That's wrong: `infra/lb/haproxy.cfg`'s `is_api` ACL (`path_beg /api/`) is
+evaluated before the web catch-all and sends every `/api/*` request to `be_api` (Django), so a
+Next.js route handler under `src/app/api/` is unreachable once the frontend runs behind the
+balancer (`make up WEB=real`) — it 404s at the edge before Next.js ever sees it. The routes live at
+`src/app/sandbox/*` instead, a path the balancer doesn't claim.
 
 ## 7. Demo data
 

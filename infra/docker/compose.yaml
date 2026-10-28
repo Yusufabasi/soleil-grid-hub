@@ -253,6 +253,13 @@ services:
       HOSTNAME: 0.0.0.0
       PORT: "3000"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      # The demo shell's two server-only values (docs/plan/frontend/demo-shell-plan.md section 6):
+      # the provider double's control token and the address it answers on inside this network. The
+      # route handlers under src/app/api/demo read both, server-side, and the browser never sees
+      # either. The nginx stub ignores them; `make up WEB=real` is where they matter, and a demo
+      # whose sandbox buttons answered "token not set" would be a broken demo.
+      STUB_CONTROL_TOKEN: ${STUB_CONTROL_TOKEN:?set STUB_CONTROL_TOKEN in .env (make env)}
+      PROVIDER_STUB_BASE_URL: http://provider-stub:9100
     stop_grace_period: 20s
     restart: unless-stopped
     read_only: true
@@ -450,6 +457,12 @@ services:
       # answers `duplicate` — so the slice 04 end-to-end module recreates this service under a
       # seed of its own before it runs. The default here is the plain `make up` value.
       STUB_SEED: ${STUB_SEED:-20261027}
+      # Seconds before the double settles a collection on its own if nothing calls its control API
+      # first (tools/provider_stub/src/provider_stub/config.py). The demo shell's sandbox panel
+      # (frontend/README.md "The two payment outcomes") depends on this being 0 so its own click is
+      # the cause rather than a race against a timer; `make up`'s default of 5 is for poking the
+      # API by hand, where a free auto-settle is convenient.
+      STUB_AUTO_CONFIRM_SECONDS: ${STUB_AUTO_CONFIRM_SECONDS:-5}
     volumes:
       - providerstubdata:/var/lib/provider_stub
     ports:

@@ -16,7 +16,7 @@
  * - it does nothing in production, where `compose.web.yaml` passes both values to the container.
  *
  * It is imported only by `@/lib/stub-control`, which is imported only by the two route handlers
- * under `src/app/api/demo/`, so neither this code nor either value can reach a client chunk.
+ * under `src/app/sandbox/`, so neither this code nor either value can reach a client chunk.
  */
 
 import { readFileSync } from "node:fs";

@@ -64,7 +64,7 @@ Both happen on a top-up's detail screen (`/customer/topups/[id]`), which polls `
 seconds while the status is unsettled. Customer: **Awa Diallo**, `+243810000101`, meter `SN-0001`.
 
 **Happy path.** Start a top-up, then press **"Simulate mobile-money PIN confirmation"** in the sandbox
-panel. That posts to a Next.js route handler (`src/app/api/demo/complete-collection/route.ts`), which
+panel. That posts to a Next.js route handler (`src/app/sandbox/complete-collection/route.ts`), which
 computes the provider's own reference (`MP + sha256(top_up_id)[:10]`) and tells the provider double
 the payer entered their PIN, over `POST {PROVIDER_STUB_BASE_URL}/control/collections/{ref}/complete`
 with `STUB_CONTROL_TOKEN` — the token never reaches the browser. The double then signs a
@@ -121,7 +121,8 @@ src/app/                     landing, then one door per persona
   staff/customers/[id]/      profile, plan and tariff, wallet, top-ups
   staff/meters/              the ops view across sites
   staff/ledger/              accounts with live balances -> transactions, line by line
-  api/demo/                  the two sandbox proxies (server-only control token)
+  sandbox/                   the two sandbox proxies (server-only control token; kept outside
+                              /api/ because the edge balancer routes that prefix to Django)
   web/health/                the health route the balancer's `be_web` pool probes
 src/lib/                     api wrapper, types, session context, permissions, formatters,
                              proof of work, provider reference, server-only env
